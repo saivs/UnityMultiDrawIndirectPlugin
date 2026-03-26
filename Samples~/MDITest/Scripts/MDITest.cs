@@ -160,7 +160,7 @@ public class MDITest : MonoBehaviour
 
         if (_drawMode == DrawMode.MultiDrawIndirect)
         {
-            commandBuffer.DrawProceduralIndirectMDI(
+            commandBuffer.MultiDrawIndexedIndirect(
                 indexBuffer: _indexBuffer,
                 material: _material,
                 properties: _mpb,

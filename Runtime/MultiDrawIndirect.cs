@@ -12,7 +12,7 @@ using UnityEngine.Rendering.RenderGraphModule;
 namespace Saivs.Graphics.Core.MDI
 {
     /// <summary>
-    /// Native Multi-Draw Indirect plugin bridge (D3D11, D3D12, Vulkan).
+    /// Native Multi-Draw Indirect plugin bridge (D3D11, D3D12, Vulkan, OpenGLES, OpenGL).
     ///
     /// Flow (identical for all APIs):
     /// 1. DrawProceduralIndirect with dummy args (instanceCount=0) — binds PSO, render targets, shaders.
@@ -139,7 +139,7 @@ namespace Saivs.Graphics.Core.MDI
         // -----------------------------------------------------------------------
         // CommandBuffer extension
         // -----------------------------------------------------------------------
-        public static void DrawProceduralIndirectMDI(
+        public static void MultiDrawIndexedIndirect(
             this CommandBuffer cmd,
             GraphicsBuffer indexBuffer,
             Material material,
@@ -180,7 +180,7 @@ namespace Saivs.Graphics.Core.MDI
         // -----------------------------------------------------------------------
         // RasterCommandBuffer extension
         // -----------------------------------------------------------------------
-        public static void DrawProceduralIndirectMDI(
+        public static void MultiDrawIndexedIndirect(
             this RasterCommandBuffer cmd,
             GraphicsBuffer indexBuffer,
             Material material,
@@ -219,7 +219,7 @@ namespace Saivs.Graphics.Core.MDI
         // -----------------------------------------------------------------------
         // UnsafeCommandBuffer extension
         // -----------------------------------------------------------------------
-        public static void DrawProceduralIndirectMDI(
+        public static void MultiDrawIndexedIndirect(
             this UnsafeCommandBuffer cmd,
             GraphicsBuffer indexBuffer,
             Material material,

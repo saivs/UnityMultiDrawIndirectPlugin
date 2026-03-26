@@ -84,7 +84,7 @@ The plugin exposes a single extension method on `CommandBuffer` (and `RasterComm
 ```csharp
 using Saivs.Graphics.Core.MDI;
 
-cmd.DrawProceduralIndirectMDI(
+cmd.MultiDrawIndexedIndirect(
     indexBuffer:    indexBuffer,
     material:       material,
     properties:     propertyBlock,
