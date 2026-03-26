@@ -1,0 +1,16 @@
+{
+    "name": "Saivs.MDI.Runtime",
+    "rootNamespace": "Saivs.Graphics.Core.MDI",
+    "references": [
+        "Unity.RenderPipelines.Universal.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": true,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

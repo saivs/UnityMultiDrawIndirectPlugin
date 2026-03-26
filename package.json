@@ -1,0 +1,26 @@
+{
+  "name": "com.saivs.multi-draw-indirect",
+  "version": "1.0.0",
+  "displayName": "Unity Multi-Draw Indirect Plugin",
+  "description": "Native plugin enabling true Multi-Draw Indirect (MDI) for Unity. Batches multiple DrawProceduralIndirect calls into a single GPU command. Supports D3D11 (NvAPI), D3D12 (ExecuteIndirect), Vulkan (vkCmdDrawIndexedIndirect), OpenGL ES 3.1+ and OpenGL Core (glMultiDrawElementsIndirect).",
+  "unity": "6000.0",
+  "author": {
+    "name": "Denis Zhukov",
+    "url": "https://github.com/saivs"
+  },
+  "keywords": [
+    "rendering",
+    "gpu-driven",
+    "multi-draw-indirect",
+    "MDI",
+    "indirect-rendering",
+    "native-plugin"
+  ],
+  "samples": [
+    {
+      "displayName": "MDI Test",
+      "description": "Simple grid of procedural quads rendered via MDI with draw mode comparison (MDI vs ProceduralIndirect loop vs RenderPrimitivesIndexedIndirect).",
+      "path": "Samples~/MDITest"
+    }
+  ]
+}
