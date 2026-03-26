@@ -5,6 +5,10 @@ using Unity.Collections.LowLevel.Unsafe;
 using UnityEngine;
 using UnityEngine.Rendering;
 
+#if UNITY_6000_0_OR_NEWER
+using UnityEngine.Rendering.RenderGraphModule;
+#endif
+
 namespace Saivs.Graphics.Core.MDI
 {
     /// <summary>
@@ -49,7 +53,7 @@ namespace Saivs.Graphics.Core.MDI
         // Pinned ring buffer for IssuePluginEventAndData — stable pointers for render thread
         private static NativeArray<NativeMDIParams> _paramsRing;
 
-        // D3D11: dummy args buffer (instanceCount=0) for zero-pixel prime draw
+        // dummy args buffer (instanceCount=0) for zero-pixel prime draw
         private static GraphicsBuffer _dummyArgsBuffer;
 
         public static bool IsSupported
@@ -172,6 +176,7 @@ namespace Saivs.Graphics.Core.MDI
             }
         }
 
+#if UNITY_6000_0_OR_NEWER
         // -----------------------------------------------------------------------
         // RasterCommandBuffer extension
         // -----------------------------------------------------------------------
@@ -248,5 +253,6 @@ namespace Saivs.Graphics.Core.MDI
                 }
             }
         }
+#endif
     }
 }

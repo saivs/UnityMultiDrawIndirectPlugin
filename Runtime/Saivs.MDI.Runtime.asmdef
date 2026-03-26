@@ -2,7 +2,7 @@
     "name": "Saivs.MDI.Runtime",
     "rootNamespace": "Saivs.Graphics.Core.MDI",
     "references": [
-        "Unity.RenderPipelines.Universal.Runtime"
+        "Unity.RenderPipelines.Core.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
