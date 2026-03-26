@@ -15,12 +15,12 @@ This plugin solves the problem by injecting a single native MDI command directly
 
 | Graphics API | Status | Backend |
 |---|---|---|
-| D3D11 | Supported | (Nvidia)NvAPI `DrawIndexedInstancedIndirect` / loop fallback |
-| D3D12 | Supported | `ExecuteIndirect` via `CommandRecordingState` |
-| Vulkan | Supported | `vkCmdDrawIndexedIndirect` (multi-draw or loop fallback) |
-| OpenGL Core | Supported | `glMultiDrawElementsIndirect` |
-| OpenGL ES 3.1+ | Supported | `glMultiDrawElementsIndirect` |
-| Metal | Not yet supported | `MTLIndirectCommandBuffer` / `executeCommandsInBuffer` |
+| D3D11 | ✅ Supported | (Nvidia)NvAPI `DrawIndexedInstancedIndirect` / loop fallback |
+| D3D12 | ✅ Supported | `ExecuteIndirect` via `CommandRecordingState` |
+| Vulkan | ✅ Supported | `vkCmdDrawIndexedIndirect` (multi-draw or loop fallback) |
+| OpenGL Core | ✅ Supported | `glMultiDrawElementsIndirect` |
+| OpenGL ES 3.1+ | ✅ Supported | `glMultiDrawElementsIndirect` |
+| Metal | ❌ Not yet supported | `MTLIndirectCommandBuffer` / `executeCommandsInBuffer` |
 
 ## Performance
 
@@ -74,7 +74,7 @@ Add the package via Unity Package Manager using a git URL:
 2. Click **+** > **Add package from git URL...**
 3. Enter:
    ```
-   https://github.com/saivs/unity-multi-draw-indirect.git
+   https://github.com/saivs/UnityMultiDrawIndirectPlugin.git
    ```
 
 ## Usage
