@@ -24,40 +24,40 @@ This plugin solves the problem by injecting a single native MDI command directly
 
 ## Performance
 
-CPU time comparison for **40,000 draw calls** on RTX 3080.
-Measured as total `PlayerLoop` time (not just command submission), so the numbers include all engine overhead per frame:
+CPU time comparison for **25,000 draw calls** on RTX 3080.
+Measured as total `PlayerLoop` time (not just command submission) in the build, so the numbers include all engine overhead per frame:
 
 ### D3D11
 
 | Method | CPU Time |
 |---|---|
-| **MultiDrawIndirect** | 0.51 ms |
-| ProceduralIndirect Loop | 46.71 ms |
-| RenderPrimitivesIndexedIndirect | 3.68 ms |
+| **MultiDrawIndirect** | 0.41 ms |
+| ProceduralIndirect Loop | 23.77 ms |
+| RenderPrimitivesIndexedIndirect | 15.11 ms |
 
 ### D3D12
 
 | Method | CPU Time |
 |---|---|
-| **MultiDrawIndirect** | 0.56 ms |
-| ProceduralIndirect Loop | 44.62 ms |
-| RenderPrimitivesIndexedIndirect | 29.83 ms |
+| **MultiDrawIndirect** | 0.35 ms |
+| ProceduralIndirect Loop | 28.61 ms |
+| RenderPrimitivesIndexedIndirect | 36.24 ms |
 
 ### Vulkan
 
 | Method | CPU Time |
 |---|---|
-| **MultiDrawIndirect** | 0.6 ms |
-| ProceduralIndirect Loop | 76.03 ms |
-| RenderPrimitivesIndexedIndirect | 18.57 ms |
+| **MultiDrawIndirect** | 0.35 ms |
+| ProceduralIndirect Loop | 25.06 ms |
+| RenderPrimitivesIndexedIndirect | 23.08 ms |
 
 ### OpenGLES
 
 | Method | CPU Time |
 |---|---|
-| **MultiDrawIndirect** | 1.23 ms |
-| ProceduralIndirect Loop | 38.31 ms |
-| RenderPrimitivesIndexedIndirect | 13.90 ms |
+| **MultiDrawIndirect** | 1.18 ms |
+| ProceduralIndirect Loop | 25.7 ms |
+| RenderPrimitivesIndexedIndirect | 23.7 ms |
 
 ## Limitations
 
