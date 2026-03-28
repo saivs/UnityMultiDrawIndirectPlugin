@@ -300,7 +300,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 6d97d2accc4182143b3e8f5ddc3f1d68, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  _gridSize: 145
+  _gridSize: 225
   _spacing: 1.5
   _material: {fileID: 2100000, guid: e3989f0f9176eb044b1ac67c86723f89, type: 2}
   _drawMode: 0

@@ -57,7 +57,14 @@ Shader "Hidden/MDITest"
             VertexOutput vert(uint svVertexID : SV_VertexID, uint svInstanceID : SV_InstanceID)
             {
                 InitIndirectDrawArgs(0);
-                return BuildOutput(svVertexID, (globalIndirectDrawArgs.startInstance + svInstanceID));
+                
+                #if defined(SHADER_API_VULKAN)
+                uint globalInstanceID = svInstanceID;
+                #else
+                uint globalInstanceID = (globalIndirectDrawArgs.startInstance + svInstanceID);
+                #endif
+
+                return BuildOutput(svVertexID, globalInstanceID);
             }
 
             ENDHLSL
@@ -85,6 +92,8 @@ Shader "Hidden/MDITest"
             {
                 //use the MDI_INSTANCE_ID macro to get the global instance ID
                 uint globalInstanceID = MDI_INSTANCE_ID;
+
+                //you can see it in the Samples but this method is just get model position and apply the draw position
                 return BuildOutput(vertexID, globalInstanceID);
             }
             
@@ -120,11 +129,12 @@ Shader "Hidden/MDITest"
 
             VertexOutput vert(uint vertexID : SV_VertexID, uint instanceID : SV_InstanceID)
             {
-                #if defined(SHADER_API_D3D11)
-                    uint globalInstanceID = _ArgsBuffer[_DrawCallIndex].startInstance + instanceID;
+                #if defined(SHADER_API_VULKAN)
+                uint globalInstanceID = instanceID;
                 #else
-                    uint globalInstanceID = instanceID;
+                uint globalInstanceID = _ArgsBuffer[_DrawCallIndex].startInstance + instanceID;
                 #endif
+
                 return BuildOutput(vertexID, globalInstanceID);
             }
             ENDHLSL
