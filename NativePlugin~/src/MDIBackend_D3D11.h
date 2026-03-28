@@ -14,16 +14,27 @@ public:
     void Shutdown() override;
     void ExecuteMDI(const MDIParams& params) override;
     bool IsSupported() const override;
+    bool ResizeInstanceIDBuffer(uint32_t newMaxCount) override;
+    uint32_t GetMaxInstanceCount() const override { return _maxInstanceCount; }
 
 private:
     bool TryInitNvAPI();
     void ShutdownNvAPI();
     void EnsureNvAPIInitialized();
+    void InstallDeviceHook();
+    void CreateInstanceIDBuffer();
 
     ID3D11Device*              _device      = nullptr;
     ID3D11DeviceContext*       _context     = nullptr;
     ID3DUserDefinedAnnotation* _annotation  = nullptr;
     bool                       _initialized = false;
+
+    // Per-instance identity buffer [0, 1, 2, ..., _maxInstanceCount-1]
+    ID3D11Buffer* _instanceIDBuffer = nullptr;
+
+    uint32_t _maxInstanceCount = kDefaultMaxInstanceCount;
+    static constexpr uint32_t kDefaultMaxInstanceCount = 65536;
+    static constexpr uint32_t kInstanceVBSlot = 15;
 
     // NvAPI dynamic loading — lazy init
     HMODULE _nvApiModule = nullptr;

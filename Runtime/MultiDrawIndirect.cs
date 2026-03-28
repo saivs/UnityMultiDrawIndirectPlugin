@@ -1,4 +1,5 @@
 using System;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
@@ -33,9 +34,11 @@ namespace Saivs.Graphics.Core.MDI
         {
             public IntPtr argsBuffer;
             public IntPtr indexBuffer;
+            public IntPtr instanceIDBuffer;
             public uint argsOffsetBytes;
             public uint maxDrawCount;
             public uint indexFormat;
+            public uint instanceIDStride;
         }
 
         // Native imports
@@ -43,7 +46,9 @@ namespace Saivs.Graphics.Core.MDI
         [DllImport(DLL_NAME)] private static extern int MDI_GetBaseEventID();
         [DllImport(DLL_NAME)] private static extern IntPtr MDI_GetRenderEventAndDataFunc();
         [DllImport(DLL_NAME)] private static extern int MDI_IsSupported();
-        [DllImport(DLL_NAME)] private static extern int MDI_IsD3D12();
+        [DllImport(DLL_NAME)] private static extern int MDI_UsesPerInstanceVB();
+        [DllImport(DLL_NAME)] private static extern int MDI_SetMaxInstanceCount(uint maxCount);
+        [DllImport(DLL_NAME)] private static extern uint MDI_GetMaxInstanceCount();
 
         private static IntPtr _renderEventAndDataFunc;
         private static bool _initialized;
@@ -62,6 +67,39 @@ namespace Saivs.Graphics.Core.MDI
             {
                 EnsureInitialized();
                 return _supported;
+            }
+        }
+
+        /// <summary>
+        /// Maximum number of instances that can be addressed by the per-instance identity buffer
+        /// on D3D11/D3D12. For any draw command, <c>startInstance + instanceCount</c> must not exceed
+        /// this value. Default is 65,536. Returns 0 on APIs that don't use the identity buffer
+        /// (Vulkan, OpenGL, Metal).
+        /// </summary>
+        public static uint MaxInstanceCount
+        {
+            get
+            {
+                EnsureInitialized();
+                if (!_supported) return 0;
+                try { return MDI_GetMaxInstanceCount(); }
+                catch { return 0; }
+            }
+            set
+            {
+                EnsureInitialized();
+                if (!_supported) return;
+                try
+                {
+                    if (MDI_SetMaxInstanceCount(value) == 0)
+                        Debug.LogError($"[MDI] Failed to resize identity buffer to {value}.");
+                    else
+                        Debug.Log($"[MDI] Identity buffer resized to {value} entries.");
+                }
+                catch (Exception e)
+                {
+                    Debug.LogError($"[MDI] Failed to resize identity buffer: {e.Message}");
+                }
             }
         }
 
@@ -111,6 +149,7 @@ namespace Saivs.Graphics.Core.MDI
                 _paramsRing.Dispose();
             _dummyArgsBuffer?.Dispose();
             _dummyArgsBuffer = null;
+            if (_primeMesh != null) { UnityEngine.Object.DestroyImmediate(_primeMesh); _primeMesh = null; }
             _initialized = false;
         }
 
@@ -120,7 +159,9 @@ namespace Saivs.Graphics.Core.MDI
             GraphicsBuffer indexBuffer,
             int argsStartIndex,
             int argsCount,
-            out int slot)
+            out int slot,
+            GraphicsBuffer instanceIDBuffer = null,
+            int instanceIDStride = 0)
         {
             slot = MDI_AllocSlot();
 
@@ -128,9 +169,11 @@ namespace Saivs.Graphics.Core.MDI
             {
                 argsBuffer = bufferWithArgs.GetNativeBufferPtr(),
                 indexBuffer = indexBuffer.GetNativeBufferPtr(),
+                instanceIDBuffer = instanceIDBuffer != null ? instanceIDBuffer.GetNativeBufferPtr() : IntPtr.Zero,
                 argsOffsetBytes = (uint)(argsStartIndex * INDIRECT_DRAW_INDEXED_ARGS_SIZE),
                 maxDrawCount = (uint)argsCount,
-                indexFormat = 1 // R32_UINT
+                indexFormat = 1, // R32_UINT
+                instanceIDStride = (uint)instanceIDStride
             };
 
             return (IntPtr)((NativeMDIParams*)_paramsRing.GetUnsafeReadOnlyPtr() + slot);
@@ -139,6 +182,45 @@ namespace Saivs.Graphics.Core.MDI
         // -----------------------------------------------------------------------
         // CommandBuffer extension
         // -----------------------------------------------------------------------
+        private static bool _usesPerInstanceVB;
+        private static bool _perInstanceVBChecked;
+        private static Mesh _primeMesh;
+
+        private static bool UsesPerInstanceVB
+        {
+            get
+            {
+                if (!_perInstanceVBChecked)
+                {
+                    _perInstanceVBChecked = true;
+                    try { _usesPerInstanceVB = _supported && MDI_UsesPerInstanceVB() != 0; }
+                    catch { _usesPerInstanceVB = false; }
+                }
+                return _usesPerInstanceVB;
+            }
+        }
+
+        // Create a minimal mesh whose vertex layout includes TEXCOORD7.
+        // When Unity renders this mesh, it creates a PSO with TEXCOORD7
+        // in the input layout — our native hook then modifies it to be
+        // per-instance on VB slot 15.
+        private static Mesh GetPrimeMesh()
+        {
+            if (_primeMesh != null) return _primeMesh;
+
+            _primeMesh = new Mesh { name = "MDI_PrimeMesh" };
+            _primeMesh.SetVertexBufferParams(3,
+                new VertexAttributeDescriptor(VertexAttribute.Position, VertexAttributeFormat.Float32, 3, stream: 0),
+                new VertexAttributeDescriptor(VertexAttribute.TexCoord7, VertexAttributeFormat.UInt32, 1, stream: 1)
+            );
+            _primeMesh.SetVertexBufferData(new Vector3[3], 0, 0, 3, stream: 0);
+            _primeMesh.SetVertexBufferData(new uint[3], 0, 0, 3, stream: 1);
+            _primeMesh.SetIndices(new int[] { 0, 1, 2 }, MeshTopology.Triangles, 0);
+            _primeMesh.bounds = new Bounds(Vector3.zero, Vector3.one * 10000);
+
+            return _primeMesh;
+        }
+
         public static void MultiDrawIndexedIndirect(
             this CommandBuffer cmd,
             GraphicsBuffer indexBuffer,
@@ -148,20 +230,28 @@ namespace Saivs.Graphics.Core.MDI
             MeshTopology topology,
             GraphicsBuffer bufferWithArgs,
             int argsStartIndex,
-            int argsCount)
+            int argsCount,
+            GraphicsBuffer instanceIDBuffer = null,)
         {
             EnsureInitialized();
 
             if (_supported && argsCount > 1)
             {
-                // Dummy prime draw (instanceCount=0) — binds PSO, render targets, shaders.
-                // Renders zero pixels. Plugin handles ALL draws.
-                cmd.DrawProceduralIndirect(
-                    indexBuffer: indexBuffer, matrix: Matrix4x4.identity, material: material,
-                    shaderPass: shaderPass, topology: topology, bufferWithArgs: _dummyArgsBuffer,
-                    argsOffset: 0, properties: properties);
+                // Prime draw: sets PSO + render state on the command list.
+                // On D3D12, use a Mesh with TEXCOORD7 to force a PSO whose
+                // input layout includes TEXCOORD7 (our hook patches it to
+                // per-instance on VB slot 15). Zero-area triangle = no pixels.
+                if (UsesPerInstanceVB)
+                    cmd.DrawMesh(GetPrimeMesh(), Matrix4x4.identity, material, 0, shaderPass, properties);
+                else
+                    cmd.DrawProceduralIndirect(
+                        indexBuffer: indexBuffer, matrix: Matrix4x4.identity, material: material,
+                        shaderPass: shaderPass, topology: topology, bufferWithArgs: _dummyArgsBuffer,
+                        argsOffset: 0, properties: properties);
 
-                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, out int slot);
+                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, out int slot,
+                    instanceIDBuffer, sizeof(uint));
+
                 cmd.IssuePluginEventAndData(_renderEventAndDataFunc, _baseEventID + slot, dataPtr);
             }
             else
@@ -189,23 +279,28 @@ namespace Saivs.Graphics.Core.MDI
             MeshTopology topology,
             GraphicsBuffer bufferWithArgs,
             int argsStartIndex,
-            int argsCount)
+            int argsCount,
+            GraphicsBuffer instanceIDBuffer = null)
         {
             EnsureInitialized();
 
             if (_supported && argsCount > 1)
             {
-                cmd.DrawProceduralIndirect(
-                    indexBuffer: indexBuffer, matrix: Matrix4x4.identity, material: material,
-                    shaderPass: shaderPass, topology: topology, bufferWithArgs: _dummyArgsBuffer,
-                    argsOffset: 0, properties: properties);
+                if (UsesPerInstanceVB)
+                    cmd.DrawMesh(GetPrimeMesh(), Matrix4x4.identity, material, 0, shaderPass, properties);
+                else
+                    cmd.DrawProceduralIndirect(
+                        indexBuffer: indexBuffer, matrix: Matrix4x4.identity, material: material,
+                        shaderPass: shaderPass, topology: topology, bufferWithArgs: _dummyArgsBuffer,
+                        argsOffset: 0, properties: properties);
 
-                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, out int slot);
+                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, out int slot,
+                    instanceIDBuffer, sizeof(uint));
+
                 cmd.IssuePluginEventAndData(_renderEventAndDataFunc, _baseEventID + slot, dataPtr);
             }
             else
             {
-                // ProceduralIndirectLoop in case of no MDI support
                 for (int i = 0; i < argsCount; i++)
                 {
                     cmd.DrawProceduralIndirect(
@@ -228,18 +323,24 @@ namespace Saivs.Graphics.Core.MDI
             MeshTopology topology,
             GraphicsBuffer bufferWithArgs,
             int argsStartIndex,
-            int argsCount)
+            int argsCount,
+            GraphicsBuffer instanceIDBuffer = null)
         {
             EnsureInitialized();
 
             if (_supported && argsCount > 1)
             {
-                cmd.DrawProceduralIndirect(
-                    indexBuffer: indexBuffer, matrix: Matrix4x4.identity, material: material,
+                if (UsesPerInstanceVB)
+                    cmd.DrawMesh(GetPrimeMesh(), Matrix4x4.identity, material, 0, shaderPass, properties);
+                else
+                    cmd.DrawProceduralIndirect(
+                        indexBuffer: indexBuffer, matrix: Matrix4x4.identity, material: material,
                     shaderPass: shaderPass, topology: topology, bufferWithArgs: _dummyArgsBuffer,
                     argsOffset: 0, properties: properties);
 
-                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, out int slot);
+                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, out int slot,
+                    instanceIDBuffer, sizeof(uint));
+
                 cmd.IssuePluginEventAndData(_renderEventAndDataFunc, _baseEventID + slot, dataPtr);
             }
             else

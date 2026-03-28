@@ -1,0 +1,78 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="D:\Projects\Plugins\unity-multi-draw-indirect\NativePlugin~\src\MultiDrawIndirect.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\Projects\Plugins\unity-multi-draw-indirect\NativePlugin~\src\MDIBackend_D3D12.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\Projects\Plugins\unity-multi-draw-indirect\NativePlugin~\src\MDIBackend_D3D11.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\Projects\Plugins\unity-multi-draw-indirect\NativePlugin~\src\MDIBackend_Vulkan.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\Projects\Plugins\unity-multi-draw-indirect\NativePlugin~\src\MDIBackend_GLES.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="D:\Projects\Plugins\unity-multi-draw-indirect\NativePlugin~\src\MDILog.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Projects\Plugins\unity-multi-draw-indirect\NativePlugin~\src\MDIBackend.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Projects\Plugins\unity-multi-draw-indirect\NativePlugin~\src\MDIBackend_D3D12.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Projects\Plugins\unity-multi-draw-indirect\NativePlugin~\src\MDIBackend_D3D11.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Projects\Plugins\unity-multi-draw-indirect\NativePlugin~\src\MDIBackend_Vulkan.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Projects\Plugins\unity-multi-draw-indirect\NativePlugin~\src\MDIBackend_GLES.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Projects\Plugins\unity-multi-draw-indirect\NativePlugin~\src\MDIBackend_Stub.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Projects\Plugins\unity-multi-draw-indirect\NativePlugin~\src\vulkan\vulkan.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Projects\Plugins\unity-multi-draw-indirect\NativePlugin~\src\gles\gles_minimal.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Projects\Plugins\unity-multi-draw-indirect\NativePlugin~\src\Unity\IUnityInterface.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Projects\Plugins\unity-multi-draw-indirect\NativePlugin~\src\Unity\IUnityGraphics.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Projects\Plugins\unity-multi-draw-indirect\NativePlugin~\src\Unity\IUnityGraphicsD3D11.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Projects\Plugins\unity-multi-draw-indirect\NativePlugin~\src\Unity\IUnityGraphicsD3D12.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Projects\Plugins\unity-multi-draw-indirect\NativePlugin~\src\Unity\IUnityGraphicsVulkan.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Projects\Plugins\unity-multi-draw-indirect\NativePlugin~\src\Unity\IUnityRenderingExtensions.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="D:\Projects\Plugins\unity-multi-draw-indirect\NativePlugin~\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{BB1C6159-EACD-3B76-A7A1-46096657255B}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{211F0CF5-2D9E-3954-A20D-5581C8FA268E}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

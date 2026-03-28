@@ -37,6 +37,16 @@ typedef ptrdiff_t      GLsizeiptr;
 #define GL_FALSE                      0
 #define GL_TRUE                       1
 
+// Buffer targets
+#define GL_ARRAY_BUFFER               0x8892
+
+// Data types
+#define GL_FLOAT                      0x1406
+#define GL_INT                        0x1404
+
+// Buffer usage
+#define GL_STATIC_DRAW                0x88E4
+
 // Function pointer types
 
 // glDrawElementsIndirect — OpenGL ES 3.1 core
@@ -53,6 +63,14 @@ typedef void (GL_APIENTRY *PFNGLBINDBUFFERPROC)(GLenum target, GLuint buffer);
 
 // glGetString
 typedef const GLchar* (GL_APIENTRY *PFNGLGETSTRINGPROC)(GLenum name);
+
+// Identity buffer support
+typedef void (GL_APIENTRY *PFNGLGENBUFFERSPROC)(GLsizei n, GLuint* buffers);
+typedef void (GL_APIENTRY *PFNGLDELETEBUFFERSPROC)(GLsizei n, const GLuint* buffers);
+typedef void (GL_APIENTRY *PFNGLBUFFERDATAPROC)(GLenum target, GLsizeiptr size, const void* data, GLenum usage);
+typedef void (GL_APIENTRY *PFNGLVERTEXATTRIBIPOINTERPROC)(GLuint index, GLint size, GLenum type, GLsizei stride, const void* pointer);
+typedef void (GL_APIENTRY *PFNGLVERTEXATTRIBDIVISORPROC)(GLuint index, GLuint divisor);
+typedef void (GL_APIENTRY *PFNGLENABLEVERTEXATTRIBARRAYPROC)(GLuint index);
 
 // Platform-specific proc address resolver
 #ifdef _WIN32

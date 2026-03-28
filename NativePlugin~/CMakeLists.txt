@@ -12,6 +12,7 @@ set(SOURCES
 )
 
 set(HEADERS
+    src/MDILog.h
     src/MDIBackend.h
     src/MDIBackend_D3D12.h
     src/MDIBackend_D3D11.h

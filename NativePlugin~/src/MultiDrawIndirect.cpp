@@ -214,3 +214,28 @@ MDI_IsD3D12()
 {
     return (g_graphics && g_graphics->GetRenderer() == kUnityGfxRendererD3D12) ? 1 : 0;
 }
+
+extern "C" int UNITY_INTERFACE_EXPORT UNITY_INTERFACE_API
+MDI_UsesPerInstanceVB()
+{
+    if (!g_graphics) return 0;
+    auto renderer = g_graphics->GetRenderer();
+    // All APIs except Vulkan/WebGPU need the identity buffer because
+    // SV_InstanceID / gl_InstanceID does NOT include startInstance/baseInstance.
+    // Only Vulkan's gl_InstanceIndex includes firstInstance.
+    return (renderer != kUnityGfxRendererVulkan) ? 1 : 0;
+}
+
+extern "C" int UNITY_INTERFACE_EXPORT UNITY_INTERFACE_API
+MDI_SetMaxInstanceCount(uint32_t maxCount)
+{
+    if (!g_backend) return 0;
+    return g_backend->ResizeInstanceIDBuffer(maxCount) ? 1 : 0;
+}
+
+extern "C" uint32_t UNITY_INTERFACE_EXPORT UNITY_INTERFACE_API
+MDI_GetMaxInstanceCount()
+{
+    if (!g_backend) return 0;
+    return g_backend->GetMaxInstanceCount();
+}

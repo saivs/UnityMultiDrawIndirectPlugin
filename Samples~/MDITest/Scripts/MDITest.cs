@@ -6,6 +6,7 @@ using UnityEngine.Rendering.Universal;
 /// <summary>
 /// Test MonoBehaviour for the Multi-Draw Indirect native plugin.
 /// Creates a grid of procedural quads, each dispatched as a separate draw command in a single MDI call.
+/// All draws reference a single shared quad (4 vertices) — draw index is derived from baseVertexIndex.
 /// Attach to any GameObject in the scene.
 /// </summary>
 [ExecuteInEditMode]
@@ -26,14 +27,19 @@ public class MDITest : MonoBehaviour
     [SerializeField] private Material _material;
     [SerializeField] private DrawMode _drawMode = DrawMode.MultiDrawIndirect;
 
+    private const int VERTICES_PER_QUAD = 4;
+
     private GraphicsBuffer _indexBuffer;
     private GraphicsBuffer _vertexBuffer;
+    private GraphicsBuffer _drawPositionsBuffer;
     private GraphicsBuffer _argsBuffer;
     private MaterialPropertyBlock _mpb;
     private int _drawCount;
-
+    
     private void OnEnable()
     {
+        Application.targetFrameRate = -1;
+        QualitySettings.vSyncCount = 0;
         RenderPipelineManager.beginCameraRendering += OnBeginCameraRendering;
         CreateBuffers();
     }
@@ -44,84 +50,85 @@ public class MDITest : MonoBehaviour
         DisposeBuffers();
     }
 
+
+
     private void CreateBuffers()
     {
         _drawCount = _gridSize * _gridSize;
         if (_drawCount == 0) return;
 
-        // Base quad offsets (4 verts per quad)
-        var quadOffsets = new Vector3[]
+        // Shared quad: 4 vertices in local space (used by ALL draws)
+        var quadVertices = new Vector3[]
         {
             new Vector3(-0.5f, -0.5f, 0f),
             new Vector3( 0.5f, -0.5f, 0f),
             new Vector3( 0.5f,  0.5f, 0f),
             new Vector3(-0.5f,  0.5f, 0f),
         };
+        _vertexBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, VERTICES_PER_QUAD, sizeof(float) * 3);
+        _vertexBuffer.SetData(quadVertices);
 
-        // Bake world position into vertices: 4 vertices per draw command.
-        var vertices = new Vector3[4 * _drawCount];
+        // Shared index buffer: 6 indices for one quad
+        var indices = new int[] { 0, 1, 2, 0, 2, 3 };
+        _indexBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Index, 6, sizeof(int));
+        _indexBuffer.SetData(indices);
+
+        // Per-draw world positions
+        var positions = new Vector3[_drawCount];
         for (int z = 0; z < _gridSize; z++)
         {
             for (int x = 0; x < _gridSize; x++)
             {
                 int i = z * _gridSize + x;
-                var offset = new Vector3(
+                positions[i] = new Vector3(
                     (x - _gridSize / 2f + 0.5f) * _spacing,
                     0f,
                     (z - _gridSize / 2f + 0.5f) * _spacing);
-
-                for (int v = 0; v < 4; v++)
-                    vertices[i * 4 + v] = quadOffsets[v] + offset;
             }
         }
-        _vertexBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, 4 * _drawCount, sizeof(float) * 3);
-        _vertexBuffer.SetData(vertices);
 
-        // Index buffer: 6 indices per draw, pre-offset to point at correct vertices.
-        var indices = new int[6 * _drawCount];
-        for (int d = 0; d < _drawCount; d++)
-        {
-            int vBase = d * 4;
-            int iBase = d * 6;
-            indices[iBase + 0] = vBase + 0;
-            indices[iBase + 1] = vBase + 1;
-            indices[iBase + 2] = vBase + 2;
-            indices[iBase + 3] = vBase + 0;
-            indices[iBase + 4] = vBase + 2;
-            indices[iBase + 5] = vBase + 3;
-        }
-        _indexBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Index, 6 * _drawCount, sizeof(int));
-        _indexBuffer.SetData(indices);
+        _drawPositionsBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, _drawCount, sizeof(float) * 3);
+        _drawPositionsBuffer.SetData(positions);
 
-        // Indirect args: each draw uses startIndex to pick its 6 indices from the fat index buffer.
-        var args = new GraphicsBuffer.IndirectDrawIndexedArgs[_drawCount];
-        for (int i = 0; i < _drawCount; i++)
+        // Indirect args: all draws share the same 6 indices and 4 vertices
+        var args = new GraphicsBuffer.IndirectDrawIndexedArgs[_drawCount / 2];
+        
+        for (int i = 0; i < _drawCount / 2; i++)
         {
             args[i] = new GraphicsBuffer.IndirectDrawIndexedArgs
             {
                 indexCountPerInstance = 6,
-                instanceCount = (uint)(Random.Range(0f,1f) > 0.5f ? 1 : 0),
-                startIndex = (uint)(i * 6),
+                instanceCount = 2,
+                startIndex = 0,
                 baseVertexIndex = 0,
-                startInstance = 0
+                startInstance = (uint)(i * 2)
             };
         }
-        _argsBuffer = new GraphicsBuffer(GraphicsBuffer.Target.IndirectArguments, _drawCount,
+
+        _argsBuffer = new GraphicsBuffer(
+            GraphicsBuffer.Target.IndirectArguments | GraphicsBuffer.Target.Structured,
+            _drawCount / 2,
             GraphicsBuffer.IndirectDrawIndexedArgs.size);
         _argsBuffer.SetData(args);
 
+        _drawCount = _drawCount / 2;
+
         _mpb = new MaterialPropertyBlock();
         _mpb.SetBuffer("_VertexBuffer", _vertexBuffer);
+        _mpb.SetBuffer("_DrawPositions", _drawPositionsBuffer);
+        _mpb.SetBuffer("_ArgsBuffer", _argsBuffer);
     }
 
     private void DisposeBuffers()
     {
         _indexBuffer?.Dispose();
         _vertexBuffer?.Dispose();
+        _drawPositionsBuffer?.Dispose();
         _argsBuffer?.Dispose();
 
         _indexBuffer = null;
         _vertexBuffer = null;
+        _drawPositionsBuffer = null;
         _argsBuffer = null;
     }
 
@@ -153,6 +160,39 @@ public class MDITest : MonoBehaviour
             urpRenderer.RenderOpaqueForwardPass.EnqueueRenderObjects(RenderMDI);
         }
     }
+    private float _fps;
+    private float _fpsTimer;
+    private int _fpsFrames;
+
+    private void Update()
+    {
+        _fpsFrames++;
+        _fpsTimer += Time.unscaledDeltaTime;
+        if (_fpsTimer >= 0.5f)
+        {
+            _fps = _fpsFrames / _fpsTimer;
+            _fpsFrames = 0;
+            _fpsTimer = 0f;
+        }
+
+        if (Input.GetKeyDown(KeyCode.Space))
+        {
+            if(_drawMode == DrawMode.MultiDrawIndirect)
+            {
+                _drawMode = DrawMode.ProceduralIndirectLoop;
+            }
+            else if(_drawMode == DrawMode.ProceduralIndirectLoop)
+            {
+                _drawMode = DrawMode.RenderPrimitivesIndexedIndirect;
+            }
+            else if(_drawMode == DrawMode.RenderPrimitivesIndexedIndirect)
+            {
+                _drawMode = DrawMode.MultiDrawIndirect;
+            }
+        }
+    }
+
+    private static readonly int DrawCallIndexID = Shader.PropertyToID("_DrawCallIndex");
 
     private void RenderMDI(RasterCommandBuffer commandBuffer)
     {
@@ -160,11 +200,12 @@ public class MDITest : MonoBehaviour
 
         if (_drawMode == DrawMode.MultiDrawIndirect)
         {
+            // Pass 1: MDI — native plugin sets cbuffer b7 per draw
             commandBuffer.MultiDrawIndexedIndirect(
                 indexBuffer: _indexBuffer,
                 material: _material,
                 properties: _mpb,
-                shaderPass: 0,
+                shaderPass: 1,
                 topology: MeshTopology.Triangles,
                 bufferWithArgs: _argsBuffer,
                 argsStartIndex: 0,
@@ -172,13 +213,15 @@ public class MDITest : MonoBehaviour
         }
         else
         {
+            // Pass 2: ProceduralLoop — set _DrawCallIndex before each draw
             for (int i = 0; i < _drawCount; i++)
             {
+                commandBuffer.SetGlobalInt(DrawCallIndexID, i);
                 commandBuffer.DrawProceduralIndirect(
                     indexBuffer: _indexBuffer,
                     matrix: Matrix4x4.identity,
                     material: _material,
-                    shaderPass: 0,
+                    shaderPass: 2,
                     topology: MeshTopology.Triangles,
                     bufferWithArgs: _argsBuffer,
                     argsOffset: i * GraphicsBuffer.IndirectDrawIndexedArgs.size,
@@ -187,13 +230,24 @@ public class MDITest : MonoBehaviour
         }
     }
 
+    private static GUIStyle _guiStyle;
+
     private void OnGUI()
     {
-        GUILayout.BeginArea(new Rect(10, 10, 350, 140));
-        GUILayout.Label($"MDI Plugin Supported: {MultiDrawIndirect.IsSupported}");
-        GUILayout.Label($"Draw Mode: {_drawMode}");
-        GUILayout.Label($"Draw Commands: {_drawCount}");
-        GUILayout.Label($"Graphics API: {SystemInfo.graphicsDeviceType}");
+        if (_guiStyle == null)
+        {
+            _guiStyle = new GUIStyle(GUI.skin.label);
+            _guiStyle.fontStyle = FontStyle.Bold;
+            _guiStyle.fontSize = 16;
+            _guiStyle.normal.textColor = new Color(0.9f, 0f, 0.1f);
+        }
+
+        GUILayout.BeginArea(new Rect(10, 10, 400, 200));
+        GUILayout.Label($"FPS: {_fps:F1}  ({1000f / Mathf.Max(_fps, 0.001f):F2} ms)", _guiStyle);
+        GUILayout.Label($"MDI Plugin Supported: {MultiDrawIndirect.IsSupported}", _guiStyle);
+        GUILayout.Label($"Draw Mode: {_drawMode} (Space to switch)", _guiStyle);
+        GUILayout.Label($"Draw Commands: {_drawCount}", _guiStyle);
+        GUILayout.Label($"Graphics API: {SystemInfo.graphicsDeviceType}", _guiStyle);
         GUILayout.EndArea();
     }
 }
