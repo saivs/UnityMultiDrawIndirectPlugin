@@ -2,6 +2,8 @@
 
 A native plugin that brings true **Multi-Draw Indirect (MDI)** to Unity.
 
+![MDI Test](MDI_Test.gif)
+
 ## Why?
 
 Modern GPU-driven rendering pipelines rely on Multi-Draw Indirect to batch thousands of draw calls into a single GPU command. Unity does **not** expose MDI in any form:
