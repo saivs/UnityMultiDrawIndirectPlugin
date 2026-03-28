@@ -120,6 +120,7 @@ bool MDIBackend_GLES::ResolveGLFunctions()
     _glGenVertexArrays = (PFNGLGENVERTEXARRAYSPROC)GLGetProcAddress("glGenVertexArrays");
     _glDeleteVertexArrays = (PFNGLDELETEVERTEXARRAYSPROC)GLGetProcAddress("glDeleteVertexArrays");
     _glBindVertexArray = (PFNGLBINDVERTEXARRAYPROC)GLGetProcAddress("glBindVertexArray");
+    _glIsVertexArray = (PFNGLISVERTEXARRAYPROC)GLGetProcAddress("glIsVertexArray");
 
     if (!_glGenBuffers || !_glDeleteBuffers || !_glBufferData ||
         !_glVertexAttribIPointer || !_glVertexAttribDivisor || !_glEnableVertexAttribArray ||
@@ -175,55 +176,41 @@ void MDIBackend_GLES::CreateInstanceIDBuffer()
 
 void MDIBackend_GLES::BindInstanceIDAttribute()
 {
-    // Query the currently active shader program to find TEXCOORD7 attribute location.
-    // Unity's HLSLcc cross-compiler generates GLSL variable names from HLSL semantics,
-    // but the exact name and location vary depending on the shader and compiler version.
     GLint program = 0;
     _glGetIntegerv(GL_CURRENT_PROGRAM, &program);
-    if (program == 0)
-    {
-        DebugLog("[MDI] GLES: BindInstanceIDAttribute — no program bound!\n");
-        return;
-    }
+    if (program == 0) return;
 
-    // Try known HLSLcc naming conventions for TEXCOORD7
-    static const char* candidates[] = {
-        "in_TEXCOORD7",      // HLSLcc default for vertex inputs
-        "vs_TEXCOORD7",      // alternative HLSLcc prefix
-        "TEXCOORD7",         // raw semantic name
-    };
-
+    // Cache location per program — avoids glGetAttribLocation every frame
     GLint location = -1;
-    for (const char* name : candidates)
+    if (static_cast<GLuint>(program) == _cachedProgram)
     {
-        location = _glGetAttribLocation(static_cast<GLuint>(program), name);
-        if (location >= 0)
+        location = _cachedTexcoord7Location;
+    }
+    else
+    {
+        static const char* candidates[] = {
+            "in_TEXCOORD7",
+            "vs_TEXCOORD7",
+            "TEXCOORD7",
+        };
+
+        for (const char* name : candidates)
         {
-            DebugLog("[MDI] GLES: found TEXCOORD7 at location %d (name: %s, program: %d)\n",
-                     location, name, program);
-            break;
+            location = _glGetAttribLocation(static_cast<GLuint>(program), name);
+            if (location >= 0) break;
         }
+
+        _cachedProgram = static_cast<GLuint>(program);
+        _cachedTexcoord7Location = location;
     }
 
-    if (location < 0)
-    {
-        DebugLog("[MDI] GLES: TEXCOORD7 attribute not found in shader program %d\n", program);
-        return;
-    }
+    if (location < 0) return;
 
-    // Save Unity's GL_ARRAY_BUFFER binding
-    GLint prevArrayBuffer = 0;
-    _glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &prevArrayBuffer);
-
-    // Bind identity buffer to the discovered location as per-instance data.
-    // baseInstance in draw args offsets per-instance attribute reads automatically.
     _glBindBuffer(GL_ARRAY_BUFFER, _instanceIDBuffer);
     _glVertexAttribIPointer(static_cast<GLuint>(location), 1, GL_UNSIGNED_INT, sizeof(uint32_t), nullptr);
     _glVertexAttribDivisor(static_cast<GLuint>(location), 1);
     _glEnableVertexAttribArray(static_cast<GLuint>(location));
-
-    // Restore Unity's previous GL_ARRAY_BUFFER binding
-    _glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(prevArrayBuffer));
+    _glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
 bool MDIBackend_GLES::ResizeInstanceIDBuffer(uint32_t newMaxCount)
@@ -256,6 +243,11 @@ bool MDIBackend_GLES::Initialize(IUnityInterfaces* unityInterfaces)
 
 void MDIBackend_GLES::Shutdown()
 {
+    if (_mdiVAO && _glDeleteVertexArrays)
+    {
+        _glDeleteVertexArrays(1, &_mdiVAO);
+        _mdiVAO = 0;
+    }
     if (_instanceIDBuffer && _glDeleteBuffers)
     {
         _glDeleteBuffers(1, &_instanceIDBuffer);
@@ -275,6 +267,7 @@ void MDIBackend_GLES::Shutdown()
     _glGenVertexArrays = nullptr;
     _glDeleteVertexArrays = nullptr;
     _glBindVertexArray = nullptr;
+    _glIsVertexArray = nullptr;
     _initialized = false;
     _multiDrawIndirectSupported = false;
     DebugLog("[MDI] GLES backend shutdown\n");
@@ -301,13 +294,19 @@ void MDIBackend_GLES::ExecuteMDI(const MDIParams& params)
     if (_instanceIDBuffer == 0)
         CreateInstanceIDBuffer();
 
-    // Create a fresh VAO every call — Unity may invalidate GL objects
-    // on maximize/detach without firing device reset events.
-    GLuint tempVAO = 0;
-    _glGenVertexArrays(1, &tempVAO);
+    // Validate cached VAO — Unity may destroy GL objects on maximize/detach
+    // without firing device reset events. glIsVertexArray detects this.
+    if (_mdiVAO != 0 && !_glIsVertexArray(_mdiVAO))
+    {
+        _mdiVAO = 0;
+        DebugLog("[MDI] GLES: VAO invalidated, recreating\n");
+    }
+
+    if (_mdiVAO == 0)
+        _glGenVertexArrays(1, &_mdiVAO);
 
     // Bind our own VAO — all subsequent state changes are isolated from Unity
-    _glBindVertexArray(tempVAO);
+    _glBindVertexArray(_mdiVAO);
 
     // Bind caller's index buffer
     if (params.indexBuffer)
@@ -354,10 +353,9 @@ void MDIBackend_GLES::ExecuteMDI(const MDIParams& params)
 
     }
 
-    // Restore Unity's state and clean up
+    // Restore Unity's state
     _glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
     _glBindVertexArray(static_cast<GLuint>(prevVAO));
-    _glDeleteVertexArrays(1, &tempVAO);
 }
 
 bool MDIBackend_GLES::IsSupported() const

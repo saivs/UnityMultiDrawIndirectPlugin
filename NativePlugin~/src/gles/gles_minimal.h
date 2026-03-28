@@ -87,6 +87,7 @@ typedef GLenum (GL_APIENTRY *PFNGLGETERRORPROC)();
 typedef void (GL_APIENTRY *PFNGLGENVERTEXARRAYSPROC)(GLsizei n, GLuint* arrays);
 typedef void (GL_APIENTRY *PFNGLDELETEVERTEXARRAYSPROC)(GLsizei n, const GLuint* arrays);
 typedef void (GL_APIENTRY *PFNGLBINDVERTEXARRAYPROC)(GLuint array);
+typedef GLboolean (GL_APIENTRY *PFNGLISVERTEXARRAYPROC)(GLuint array);
 
 // State query and attribute location
 typedef void (GL_APIENTRY *PFNGLGETINTEGERVPROC)(GLenum pname, GLint* data);
