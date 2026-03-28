@@ -34,11 +34,9 @@ namespace Saivs.Graphics.Core.MDI
         {
             public IntPtr argsBuffer;
             public IntPtr indexBuffer;
-            public IntPtr instanceIDBuffer;
             public uint argsOffsetBytes;
             public uint maxDrawCount;
             public uint indexFormat;
-            public uint instanceIDStride;
         }
 
         // Native imports
@@ -159,9 +157,7 @@ namespace Saivs.Graphics.Core.MDI
             GraphicsBuffer indexBuffer,
             int argsStartIndex,
             int argsCount,
-            out int slot,
-            GraphicsBuffer instanceIDBuffer = null,
-            int instanceIDStride = 0)
+            out int slot)
         {
             slot = MDI_AllocSlot();
 
@@ -169,11 +165,9 @@ namespace Saivs.Graphics.Core.MDI
             {
                 argsBuffer = bufferWithArgs.GetNativeBufferPtr(),
                 indexBuffer = indexBuffer.GetNativeBufferPtr(),
-                instanceIDBuffer = instanceIDBuffer != null ? instanceIDBuffer.GetNativeBufferPtr() : IntPtr.Zero,
                 argsOffsetBytes = (uint)(argsStartIndex * INDIRECT_DRAW_INDEXED_ARGS_SIZE),
                 maxDrawCount = (uint)argsCount,
                 indexFormat = 1, // R32_UINT
-                instanceIDStride = (uint)instanceIDStride
             };
 
             return (IntPtr)((NativeMDIParams*)_paramsRing.GetUnsafeReadOnlyPtr() + slot);
@@ -230,15 +224,14 @@ namespace Saivs.Graphics.Core.MDI
             MeshTopology topology,
             GraphicsBuffer bufferWithArgs,
             int argsStartIndex,
-            int argsCount,
-            GraphicsBuffer instanceIDBuffer = null)
+            int argsCount)
         {
             EnsureInitialized();
 
             if (_supported && argsCount > 1)
             {
                 // Prime draw: sets PSO + render state on the command list.
-                // On D3D12, use a Mesh with TEXCOORD7 to force a PSO whose
+                // On D3D11/D3D12, use a Mesh with TEXCOORD7 to force a PSO whose
                 // input layout includes TEXCOORD7 (our hook patches it to
                 // per-instance on VB slot 15). Zero-area triangle = no pixels.
                 if (UsesPerInstanceVB)
@@ -249,9 +242,7 @@ namespace Saivs.Graphics.Core.MDI
                         shaderPass: shaderPass, topology: topology, bufferWithArgs: _dummyArgsBuffer,
                         argsOffset: 0, properties: properties);
 
-                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, out int slot,
-                    instanceIDBuffer, sizeof(uint));
-
+                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, out int slot);
                 cmd.IssuePluginEventAndData(_renderEventAndDataFunc, _baseEventID + slot, dataPtr);
             }
             else
@@ -279,8 +270,7 @@ namespace Saivs.Graphics.Core.MDI
             MeshTopology topology,
             GraphicsBuffer bufferWithArgs,
             int argsStartIndex,
-            int argsCount,
-            GraphicsBuffer instanceIDBuffer = null)
+            int argsCount)
         {
             EnsureInitialized();
 
@@ -294,9 +284,7 @@ namespace Saivs.Graphics.Core.MDI
                         shaderPass: shaderPass, topology: topology, bufferWithArgs: _dummyArgsBuffer,
                         argsOffset: 0, properties: properties);
 
-                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, out int slot,
-                    instanceIDBuffer, sizeof(uint));
-
+                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, out int slot);
                 cmd.IssuePluginEventAndData(_renderEventAndDataFunc, _baseEventID + slot, dataPtr);
             }
             else
@@ -323,8 +311,7 @@ namespace Saivs.Graphics.Core.MDI
             MeshTopology topology,
             GraphicsBuffer bufferWithArgs,
             int argsStartIndex,
-            int argsCount,
-            GraphicsBuffer instanceIDBuffer = null)
+            int argsCount)
         {
             EnsureInitialized();
 
@@ -335,12 +322,10 @@ namespace Saivs.Graphics.Core.MDI
                 else
                     cmd.DrawProceduralIndirect(
                         indexBuffer: indexBuffer, matrix: Matrix4x4.identity, material: material,
-                    shaderPass: shaderPass, topology: topology, bufferWithArgs: _dummyArgsBuffer,
-                    argsOffset: 0, properties: properties);
+                        shaderPass: shaderPass, topology: topology, bufferWithArgs: _dummyArgsBuffer,
+                        argsOffset: 0, properties: properties);
 
-                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, out int slot,
-                    instanceIDBuffer, sizeof(uint));
-
+                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, out int slot);
                 cmd.IssuePluginEventAndData(_renderEventAndDataFunc, _baseEventID + slot, dataPtr);
             }
             else

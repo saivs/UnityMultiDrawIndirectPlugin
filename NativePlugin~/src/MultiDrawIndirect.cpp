@@ -93,13 +93,6 @@ static void UNITY_INTERFACE_API OnGraphicsDeviceEvent(UnityGfxDeviceEventType ev
         DestroyBackend();
         g_backendSupported = 0;
     }
-    else if (eventType == kUnityGfxDeviceEventAfterReset)
-    {
-        // On OpenGL, device reset destroys all GL objects (VAOs, buffers).
-        // Notify the backend so it can invalidate and lazily recreate them.
-        if (g_backend)
-            g_backend->OnDeviceReset();
-    }
 }
 
 // -----------------------------------------------------------------------

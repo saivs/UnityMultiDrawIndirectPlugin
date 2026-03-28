@@ -307,7 +307,7 @@ void MDIBackend_D3D11::ExecuteMDI(const MDIParams& params)
     }
 
     // Bind per-instance identity VB to slot 15
-    if (_instanceIDBuffer && params.instanceIDStride > 0)
+    if (_instanceIDBuffer)
     {
         UINT vbStride = sizeof(uint32_t);
         UINT vbOffset = 0;

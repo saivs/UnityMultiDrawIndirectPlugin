@@ -8,11 +8,9 @@ struct MDIParams
 {
     void*    argsBuffer;          // Native GPU buffer pointer (ID3D12Resource*, VkBuffer, etc.)
     void*    indexBuffer;         // Native index buffer pointer (for D3D11 IASetIndexBuffer rebind)
-    void*    instanceIDBuffer;    // Per-instance vertex buffer (D3D11 only, nullptr on other APIs)
     uint32_t argsOffsetBytes;     // Byte offset into the args buffer
     uint32_t maxDrawCount;        // Number of draw commands to execute
     uint32_t indexFormat;         // 0 = R16_UINT, 1 = R32_UINT
-    uint32_t instanceIDStride;    // Stride of per-instance data in bytes (0 = not used)
 };
 
 static constexpr int MDI_MAX_PENDING = 256;
@@ -39,7 +37,4 @@ struct IMDIBackend
 
     // Current identity buffer capacity
     virtual uint32_t GetMaxInstanceCount() const { return 0; }
-
-    // Called on device reset — invalidate GPU resources that may have been destroyed
-    virtual void OnDeviceReset() {}
 };

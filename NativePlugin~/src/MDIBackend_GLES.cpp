@@ -226,14 +226,6 @@ void MDIBackend_GLES::BindInstanceIDAttribute()
     _glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(prevArrayBuffer));
 }
 
-void MDIBackend_GLES::OnDeviceReset()
-{
-    // Device reset on OpenGL destroys all GL objects.
-    // Mark handles as invalid — they will be lazily recreated.
-    _instanceIDBuffer = 0;
-    DebugLog("[MDI] GLES: device reset — invalidated identity buffer\n");
-}
-
 bool MDIBackend_GLES::ResizeInstanceIDBuffer(uint32_t newMaxCount)
 {
     if (newMaxCount == 0) return false;
@@ -301,25 +293,9 @@ void MDIBackend_GLES::ExecuteMDI(const MDIParams& params)
     GLenum indexType = (params.indexFormat == 1) ? GL_UNSIGNED_INT : GL_UNSIGNED_SHORT;
     const uint32_t stride = 20; // 5 * sizeof(uint32_t)
 
-    // Drain any pre-existing GL errors so our check is clean
-    if (_glGetError) while (_glGetError() != GL_NO_ERROR) {}
-
     // Save Unity's current VAO so we can restore it after MDI draw
     GLint prevVAO = 0;
     _glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVAO);
-
-    GLint prevProgram = 0;
-    _glGetIntegerv(GL_CURRENT_PROGRAM, &prevProgram);
-
-    GLint prevFBO = 0;
-    _glGetIntegerv(0x8CA6 /*GL_DRAW_FRAMEBUFFER_BINDING*/, &prevFBO);
-
-    static int s_logCounter = 0;
-    if (s_logCounter < 10 || s_logCounter % 300 == 0)
-        DebugLog("[MDI] GLES ExecuteMDI #%d: prevVAO=%d, program=%d, FBO=%d, args=0x%p, ib=0x%p, draws=%u\n",
-                 s_logCounter, prevVAO, prevProgram, prevFBO,
-                 params.argsBuffer, params.indexBuffer, params.maxDrawCount);
-    s_logCounter++;
 
     // Lazy (re)creation of identity buffer
     if (_instanceIDBuffer == 0)
@@ -342,7 +318,7 @@ void MDIBackend_GLES::ExecuteMDI(const MDIParams& params)
     }
 
     // Bind identity buffer to TEXCOORD7 as per-instance data
-    if (_instanceIDBuffer && params.instanceIDStride > 0)
+    if (_instanceIDBuffer)
     {
         BindInstanceIDAttribute();
 

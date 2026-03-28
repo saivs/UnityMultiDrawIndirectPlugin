@@ -589,7 +589,7 @@ void MDIBackend_D3D12::ExecuteMDI(const MDIParams& params)
     }
 
     // Bind per-instance identity VB to slot 15.
-    if (_instanceIDBuffer && params.instanceIDStride > 0)
+    if (_instanceIDBuffer)
     {
         D3D12_VERTEX_BUFFER_VIEW vbView = {};
         vbView.BufferLocation = _instanceIDBuffer->GetGPUVirtualAddress();
@@ -616,9 +616,8 @@ void MDIBackend_D3D12::ExecuteMDI(const MDIParams& params)
     if (s_callCount == 1 || s_callCount == 10 || s_callCount == 100 ||
         (s_callCount % 1000) == 0)
     {
-        DebugLog("[MDI] ExecuteMDI #%u: drawCount=%u, offset=%u, instanceIDStride=%u\n",
-                 s_callCount, params.maxDrawCount, params.argsOffsetBytes,
-                 params.instanceIDStride);
+        DebugLog("[MDI] ExecuteMDI #%u: drawCount=%u, offset=%u\n",
+                 s_callCount, params.maxDrawCount, params.argsOffsetBytes);
         DebugLog("[MDI] Hook stats: legacy=%u, stream=%u, pipelineLib=%u, "
                  "loadGfx=%u, injected=%u, skipped=%u\n",
                  g_psoLegacyCallCount, g_psoStreamCallCount,

@@ -12,7 +12,6 @@ public:
     bool IsSupported() const override;
     bool ResizeInstanceIDBuffer(uint32_t newMaxCount) override;
     uint32_t GetMaxInstanceCount() const override { return _maxInstanceCount; }
-    void OnDeviceReset() override;
 
 private:
     bool ResolveGLFunctions();
