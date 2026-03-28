@@ -231,7 +231,7 @@ namespace Saivs.Graphics.Core.MDI
             GraphicsBuffer bufferWithArgs,
             int argsStartIndex,
             int argsCount,
-            GraphicsBuffer instanceIDBuffer = null,)
+            GraphicsBuffer instanceIDBuffer = null)
         {
             EnsureInitialized();
 

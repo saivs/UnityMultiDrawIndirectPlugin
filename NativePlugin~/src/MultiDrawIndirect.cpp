@@ -93,6 +93,13 @@ static void UNITY_INTERFACE_API OnGraphicsDeviceEvent(UnityGfxDeviceEventType ev
         DestroyBackend();
         g_backendSupported = 0;
     }
+    else if (eventType == kUnityGfxDeviceEventAfterReset)
+    {
+        // On OpenGL, device reset destroys all GL objects (VAOs, buffers).
+        // Notify the backend so it can invalidate and lazily recreate them.
+        if (g_backend)
+            g_backend->OnDeviceReset();
+    }
 }
 
 // -----------------------------------------------------------------------
@@ -220,10 +227,10 @@ MDI_UsesPerInstanceVB()
 {
     if (!g_graphics) return 0;
     auto renderer = g_graphics->GetRenderer();
-    // All APIs except Vulkan/WebGPU need the identity buffer because
-    // SV_InstanceID / gl_InstanceID does NOT include startInstance/baseInstance.
-    // Only Vulkan's gl_InstanceIndex includes firstInstance.
-    return (renderer != kUnityGfxRendererVulkan) ? 1 : 0;
+    // Only D3D11/D3D12 need the GetPrimeMesh() path to trigger PSO hooks.
+    // OpenGL uses its own VAO for identity buffer binding — no PSO hook needed.
+    // Vulkan doesn't need identity buffer at all (SV_InstanceID includes firstInstance).
+    return (renderer == kUnityGfxRendererD3D11 || renderer == kUnityGfxRendererD3D12) ? 1 : 0;
 }
 
 extern "C" int UNITY_INTERFACE_EXPORT UNITY_INTERFACE_API

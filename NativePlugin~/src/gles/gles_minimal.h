@@ -39,6 +39,7 @@ typedef ptrdiff_t      GLsizeiptr;
 
 // Buffer targets
 #define GL_ARRAY_BUFFER               0x8892
+#define GL_ELEMENT_ARRAY_BUFFER       0x8893
 
 // Data types
 #define GL_FLOAT                      0x1406
@@ -71,6 +72,25 @@ typedef void (GL_APIENTRY *PFNGLBUFFERDATAPROC)(GLenum target, GLsizeiptr size, 
 typedef void (GL_APIENTRY *PFNGLVERTEXATTRIBIPOINTERPROC)(GLuint index, GLint size, GLenum type, GLsizei stride, const void* pointer);
 typedef void (GL_APIENTRY *PFNGLVERTEXATTRIBDIVISORPROC)(GLuint index, GLuint divisor);
 typedef void (GL_APIENTRY *PFNGLENABLEVERTEXATTRIBARRAYPROC)(GLuint index);
+
+// State query constants
+#define GL_CURRENT_PROGRAM                0x8B8D
+#define GL_ARRAY_BUFFER_BINDING           0x8894
+#define GL_VERTEX_ARRAY_BINDING           0x85B5
+#define GL_ELEMENT_ARRAY_BUFFER_BINDING   0x8895
+
+// Error checking
+#define GL_NO_ERROR                       0
+typedef GLenum (GL_APIENTRY *PFNGLGETERRORPROC)();
+
+// VAO management
+typedef void (GL_APIENTRY *PFNGLGENVERTEXARRAYSPROC)(GLsizei n, GLuint* arrays);
+typedef void (GL_APIENTRY *PFNGLDELETEVERTEXARRAYSPROC)(GLsizei n, const GLuint* arrays);
+typedef void (GL_APIENTRY *PFNGLBINDVERTEXARRAYPROC)(GLuint array);
+
+// State query and attribute location
+typedef void (GL_APIENTRY *PFNGLGETINTEGERVPROC)(GLenum pname, GLint* data);
+typedef GLint (GL_APIENTRY *PFNGLGETATTRIBLOCATIONPROC)(GLuint program, const GLchar* name);
 
 // Platform-specific proc address resolver
 #ifdef _WIN32

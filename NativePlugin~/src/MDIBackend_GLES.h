@@ -12,6 +12,7 @@ public:
     bool IsSupported() const override;
     bool ResizeInstanceIDBuffer(uint32_t newMaxCount) override;
     uint32_t GetMaxInstanceCount() const override { return _maxInstanceCount; }
+    void OnDeviceReset() override;
 
 private:
     bool ResolveGLFunctions();
@@ -28,14 +29,17 @@ private:
     PFNGLVERTEXATTRIBIPOINTERPROC _glVertexAttribIPointer = nullptr;
     PFNGLVERTEXATTRIBDIVISORPROC _glVertexAttribDivisor = nullptr;
     PFNGLENABLEVERTEXATTRIBARRAYPROC _glEnableVertexAttribArray = nullptr;
+    PFNGLGETINTEGERVPROC _glGetIntegerv = nullptr;
+    PFNGLGETATTRIBLOCATIONPROC _glGetAttribLocation = nullptr;
+    PFNGLGETERRORPROC _glGetError = nullptr;
+    PFNGLGENVERTEXARRAYSPROC _glGenVertexArrays = nullptr;
+    PFNGLDELETEVERTEXARRAYSPROC _glDeleteVertexArrays = nullptr;
+    PFNGLBINDVERTEXARRAYPROC _glBindVertexArray = nullptr;
 
     // Per-instance identity buffer [0, 1, 2, ..., _maxInstanceCount-1]
     GLuint _instanceIDBuffer = 0;
     uint32_t _maxInstanceCount = kDefaultMaxInstanceCount;
     static constexpr uint32_t kDefaultMaxInstanceCount = 65536;
-
-    // Unity maps VertexAttribute.TexCoord7 to attribute location 11
-    static constexpr GLuint kTexcoord7AttribLocation = 11;
 
     bool _initialized = false;
     bool _multiDrawIndirectSupported = false;

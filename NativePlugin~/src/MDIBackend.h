@@ -39,4 +39,7 @@ struct IMDIBackend
 
     // Current identity buffer capacity
     virtual uint32_t GetMaxInstanceCount() const { return 0; }
+
+    // Called on device reset — invalidate GPU resources that may have been destroyed
+    virtual void OnDeviceReset() {}
 };
