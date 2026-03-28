@@ -1,19 +1,9 @@
 #include "MDIBackend_GLES.h"
+#include "MDILog.h"
 #include <cstring>
-#include <stdio.h>
 #include <vector>
 
 #ifdef _WIN32
-#include <windows.h>
-static void DebugLog(const char* fmt, ...)
-{
-    char buf[512];
-    va_list args;
-    va_start(args, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, args);
-    va_end(args);
-    OutputDebugStringA(buf);
-}
 
 // On Windows, Unity uses ANGLE or desktop GL. Resolve via GetProcAddress from the GL module.
 static void* GLGetProcAddress(const char* name)
@@ -52,7 +42,6 @@ static void* GLGetProcAddress(const char* name)
 
 #else
 #include <dlfcn.h>
-#define DebugLog(...) ((void)0)
 
 // On Android / Linux, use eglGetProcAddress
 static void* GLGetProcAddress(const char* name)

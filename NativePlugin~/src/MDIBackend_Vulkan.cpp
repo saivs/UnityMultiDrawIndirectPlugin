@@ -1,20 +1,5 @@
 #include "MDIBackend_Vulkan.h"
-#include <stdio.h>
-
-#ifdef _WIN32
-#include <windows.h>
-static void DebugLog(const char* fmt, ...)
-{
-    char buf[512];
-    va_list args;
-    va_start(args, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, args);
-    va_end(args);
-    OutputDebugStringA(buf);
-}
-#else
-#define DebugLog(...) ((void)0)
-#endif
+#include "MDILog.h"
 
 // -----------------------------------------------------------------------
 // Initialize / Shutdown
