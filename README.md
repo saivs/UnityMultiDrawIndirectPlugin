@@ -16,7 +16,7 @@ This plugin solves the problem by injecting a single native MDI command directly
 | Graphics API | Status | Backend |
 |---|---|---|
 | D3D11 | ✅ Supported | (Nvidia)NvAPI `DrawIndexedInstancedIndirect` / loop fallback |
-| D3D12 | ✅ Supported | `ExecuteIndirect` via `CommandRecordingState` |
+| D3D12 | ⚠️ Build only | `ExecuteIndirect` via `CommandRecordingState` |
 | Vulkan | ✅ Supported | `vkCmdDrawIndexedIndirect` (multi-draw or loop fallback) |
 | OpenGL Core | ✅ Supported | `glMultiDrawElementsIndirect` |
 | OpenGL ES 3.1+ | ✅ Supported | `glMultiDrawElementsIndirect` |
@@ -62,6 +62,7 @@ Measured as total `PlayerLoop` time (not just command submission) in the build, 
 ## Limitations
 
 - **D3D11 + RenderDoc**: The plugin uses NvAPI, which can cause Unity to crash when RenderDoc attempts to inject at runtime. To avoid this, attach RenderDoc **at Unity startup** (launch Unity from RenderDoc) rather than connecting mid-session.
+- **D3D12 + Unity Editor**: Native MDI on D3D12 breaks the Editor's rendering. The plugin works correctly in **standalone builds only**. In the Editor, it automatically falls back to a `DrawProceduralIndirect` loop, so do not use the Editor to benchmark D3D12 MDI performance — build the project and profile the player instead.
 - **D3D11 + AMD GPUs**: D3D11 does not have a native MDI API. On NVIDIA, this is solved via NvAPI, which can attach to an already-created D3D11 device. AMD has an equivalent extension in AGS (`agsDriverExtensionsDX11_MultiDrawIndexedInstancedIndirect`), but AGS requires the D3D11 device to be created through `agsDriverExtensionsDX11_CreateDevice` — since Unity creates the device itself, AGS extensions cannot be enabled retroactively. Because of this (and lack of AMD hardware for testing), MDI on D3D11 + AMD is not currently supported. AMD GPUs are fully supported under D3D12, Vulkan, and OpenGL.
 - **Metal**: Metal supports indirect command buffers (`MTLIndirectCommandBuffer` / `executeCommandsInBuffer`), so a native MDI backend is feasible. It is not yet implemented because the author does not currently have access to a macOS/iOS device for testing.
 - **Consoles & mobile devices**: The plugin has only been tested on desktop Windows. It has not been verified on consoles (PlayStation, Xbox, Switch) or mobile devices — support on these platforms is not guaranteed.
@@ -175,9 +176,9 @@ At draw time, the plugin binds the identity buffer to slot 15. The Input Assembl
 
 ### OpenGL / OpenGL ES
 
-On OpenGL, `gl_InstanceID` also does **not** include `baseInstance` — this is a common misconception, as Vulkan's `gl_InstanceIndex` does. The solution is the same identity buffer approach, but the implementation is simpler than D3D11/D3D12: OpenGL's vertex attribute state is dynamic and part of the VAO (Vertex Array Object), so no PSO hooking is needed.
+On OpenGL, `gl_InstanceID` also does **not** include `baseInstance` — this is a common misconception, as Vulkan's `gl_InstanceIndex` does. The solution is the same identity buffer approach, but the implementation is simpler than D3D11/D3D12: OpenGL's vertex attribute state is dynamic, so no PSO hooking is needed.
 
-Before each MDI call, the plugin directly binds the identity buffer to **attribute location 11** (which corresponds to `VertexAttribute.TexCoord7` in Unity's fixed attribute layout) using `glVertexAttribIPointer` with `glVertexAttribDivisor(11, 1)`. The currently bound VAO (set up by the prime `DrawMesh` call) captures this state, and the GPU's vertex fetch stage automatically offsets reads by `baseInstance` from the draw arguments.
+Before each MDI call, the plugin creates a dedicated VAO (Vertex Array Object), queries the active shader program for the `TEXCOORD7` attribute location via `glGetAttribLocation`, and binds the identity buffer to that location using `glVertexAttribIPointer` with `glVertexAttribDivisor(location, 1)`. The attribute location and VAO are cached across frames for performance, with the VAO validated via `glIsVertexArray` to handle Unity's implicit GL context resets (e.g. window maximize/detach). After the MDI draw, the plugin restores Unity's original VAO.
 
 ### Limitations of This Approach
 
@@ -191,4 +192,4 @@ MultiDrawIndirect.MaxInstanceCount = 1_000_000;
 uint current = MultiDrawIndirect.MaxInstanceCount;
 ```
 
-On Vulkan and OpenGL this property returns 0 and has no effect — those APIs don't need an identity buffer because `SV_InstanceID` already includes `startInstance`.
+On Vulkan this property returns 0 and has no effect — Vulkan doesn't need an identity buffer because `SV_InstanceID` already includes `startInstance`.
