@@ -35,11 +35,14 @@ public class MDITest : MonoBehaviour
     private GraphicsBuffer _argsBuffer;
     private MaterialPropertyBlock _mpb;
     private int _drawCount;
-    
+    private MDIRenderPass _mdiRenderPass;
+
     private void OnEnable()
     {
         Application.targetFrameRate = -1;
         QualitySettings.vSyncCount = 0;
+        _mdiRenderPass = new MDIRenderPass();
+        _mdiRenderPass.SetCallback(RenderMDI);
         RenderPipelineManager.beginCameraRendering += OnBeginCameraRendering;
         CreateBuffers();
     }
@@ -157,7 +160,7 @@ public class MDITest : MonoBehaviour
         }
         else if (camera.GetUniversalAdditionalCameraData().scriptableRenderer is UniversalRenderer urpRenderer)
         {
-            urpRenderer.RenderOpaqueForwardPass.EnqueueRenderObjects(RenderMDI);
+            urpRenderer.EnqueuePass(_mdiRenderPass);
         }
     }
     private float _fps;
@@ -239,13 +242,15 @@ public class MDITest : MonoBehaviour
             _guiStyle = new GUIStyle(GUI.skin.label);
             _guiStyle.fontStyle = FontStyle.Bold;
             _guiStyle.fontSize = 16;
-            _guiStyle.normal.textColor = new Color(0.9f, 0f, 0.1f);
         }
+
+        _guiStyle.normal.textColor = (_drawMode == DrawMode.MultiDrawIndirect) ? new Color(0f, 0.9f, 0.1f) : new Color(0.9f, 0f, 0.1f);
 
         GUILayout.BeginArea(new Rect(10, 10, 400, 200));
         GUILayout.Label($"FPS: {_fps:F1}  ({1000f / Mathf.Max(_fps, 0.001f):F2} ms)", _guiStyle);
         GUILayout.Label($"MDI Plugin Supported: {MultiDrawIndirect.IsSupported}", _guiStyle);
-        GUILayout.Label($"Draw Mode: {_drawMode} (Space to switch)", _guiStyle);
+        GUILayout.Label($"Draw Mode: {_drawMode}", _guiStyle);
+        GUILayout.Label($"(Space to switch)", _guiStyle);
         GUILayout.Label($"Draw Commands: {_drawCount}", _guiStyle);
         GUILayout.Label($"Graphics API: {SystemInfo.graphicsDeviceType}", _guiStyle);
         GUILayout.EndArea();
