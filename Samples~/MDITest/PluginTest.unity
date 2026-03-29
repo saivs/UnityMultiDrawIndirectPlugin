@@ -265,6 +265,8 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 866735223}
+  - component: {fileID: 866735226}
+  - component: {fileID: 866735225}
   - component: {fileID: 866735224}
   m_Layer: 0
   m_Name: MDI
@@ -297,13 +299,39 @@ MonoBehaviour:
   m_GameObject: {fileID: 866735221}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 6d97d2accc4182143b3e8f5ddc3f1d68, type: 3}
+  m_Script: {fileID: 11500000, guid: 4fd6ea2801bd32242a0e631be5c4f841, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: 
-  _gridSize: 225
-  _spacing: 1.5
+  m_EditorClassIdentifier: Assembly-CSharp::FPSCounter
+  _controller: {fileID: 866735225}
+--- !u!114 &866735225
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 866735221}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d73d1ad39e735814f9cd95cf497dc323, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::MDITestController
   _material: {fileID: 2100000, guid: e3989f0f9176eb044b1ac67c86723f89, type: 2}
   _drawMode: 0
+  _bufferManager: {fileID: 866735226}
+--- !u!114 &866735226
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 866735221}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 17f47fb6d7a4d9440b855c575e04c2b3, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::MDITestBufferManager
+  _gridSize: 200
+  _spacing: 1.5
 --- !u!1 &1333492021
 GameObject:
   m_ObjectHideFlags: 1
@@ -338,6 +366,7 @@ MonoBehaviour:
     SerializedBytes: 
     ReferencedUnityObjects:
     - {fileID: 1333492022}
+    - {fileID: 0}
     SerializedBytesString: 
     Prefab: {fileID: 0}
     PrefabModificationsReferencedUnityObjects: []
@@ -391,6 +420,36 @@ MonoBehaviour:
         Assembly-CSharp]], Assembly-CSharp]], mscorlib
     - Name: 
       Entry: 12
+      Data: 1
+    - Name: 
+      Entry: 7
+      Data: 6|VladislavTsurikov.BVH.Scripts.BVHNodeAABB`1[[VladislavTsurikov.ColliderSystem.Scripts.UnityIntegration.BVHGameObject,
+        Assembly-CSharp]], Assembly-CSharp
+    - Name: _data
+      Entry: 7
+      Data: 7|VladislavTsurikov.ColliderSystem.Scripts.UnityIntegration.BVHGameObject,
+        Assembly-CSharp
+    - Name: Obj
+      Entry: 10
+      Data: 1
+    - Name: Prefab
+      Entry: 6
+      Data: 
+    - Name: 
+      Entry: 8
+      Data: 
+    - Name: _isLeaf
+      Entry: 5
+      Data: true
+    - Name: _parent
+      Entry: 9
+      Data: 4
+    - Name: _children
+      Entry: 7
+      Data: 8|System.Collections.Generic.List`1[[VladislavTsurikov.BVH.Scripts.BVHNode`1[[VladislavTsurikov.ColliderSystem.Scripts.UnityIntegration.BVHGameObject,
+        Assembly-CSharp]], Assembly-CSharp]], mscorlib
+    - Name: 
+      Entry: 12
       Data: 0
     - Name: 
       Entry: 13
@@ -403,13 +462,13 @@ MonoBehaviour:
       Data: UnityEngine.Vector3, UnityEngine.CoreModule
     - Name: 
       Entry: 4
-      Data: 0
+      Data: -53.62
     - Name: 
       Entry: 4
-      Data: 0
+      Data: -70.9
     - Name: 
       Entry: 4
-      Data: 0
+      Data: -20.85658
     - Name: 
       Entry: 8
       Data: 
@@ -418,13 +477,52 @@ MonoBehaviour:
       Data: UnityEngine.Vector3, UnityEngine.CoreModule
     - Name: 
       Entry: 4
-      Data: 0
+      Data: 46.38
     - Name: 
       Entry: 4
-      Data: 0
+      Data: 29.1
     - Name: 
       Entry: 4
-      Data: 0
+      Data: 79.14342
+    - Name: 
+      Entry: 8
+      Data: 
+    - Name: 
+      Entry: 8
+      Data: 
+    - Name: 
+      Entry: 13
+      Data: 
+    - Name: 
+      Entry: 8
+      Data: 
+    - Name: _min
+      Entry: 7
+      Data: UnityEngine.Vector3, UnityEngine.CoreModule
+    - Name: 
+      Entry: 4
+      Data: -53.62
+    - Name: 
+      Entry: 4
+      Data: -70.9
+    - Name: 
+      Entry: 4
+      Data: -20.8565826
+    - Name: 
+      Entry: 8
+      Data: 
+    - Name: _max
+      Entry: 7
+      Data: UnityEngine.Vector3, UnityEngine.CoreModule
+    - Name: 
+      Entry: 4
+      Data: 46.38
+    - Name: 
+      Entry: 4
+      Data: 29.0999985
+    - Name: 
+      Entry: 4
+      Data: 79.14342
     - Name: 
       Entry: 8
       Data: 
