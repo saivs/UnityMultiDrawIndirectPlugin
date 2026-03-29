@@ -524,8 +524,8 @@ void MDIBackend_D3D12::ConfigureEvents(IUnityInterfaces* unityInterfaces, int ba
     {
         UnityD3D12PluginEventConfig config = {};
         config.graphicsQueueAccess = kUnityD3D12GraphicsQueueAccess_DontCare;
-        config.flags = kUnityD3D12EventConfigFlag_ModifiesCommandBuffersState;
-        config.ensureActiveRenderTextureIsBound = false;
+        config.flags = 0;  // DEBUG: no flags — don't tell Unity we modify state
+        config.ensureActiveRenderTextureIsBound = false;  // DEBUG: don't rebind RT
         d3d12->ConfigureEvent(baseEventID + i, &config);
     }
 
@@ -612,7 +612,6 @@ void MDIBackend_D3D12::ExecuteMDI(const MDIParams& params)
     static uint32_t s_callCount = 0;
     s_callCount++;
 
-    // Log first call, then at frames 10, 100, and every 1000th
     if (s_callCount == 1 || s_callCount == 10 || s_callCount == 100 ||
         (s_callCount % 1000) == 0)
     {

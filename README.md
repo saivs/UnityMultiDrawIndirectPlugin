@@ -18,7 +18,7 @@ This plugin solves the problem by injecting a single native MDI command directly
 | Graphics API | Status | Backend |
 |---|---|---|
 | D3D11 | ✅ Supported | (Nvidia)NvAPI `DrawIndexedInstancedIndirect` / loop fallback |
-| D3D12 | ⚠️ Build only | `ExecuteIndirect` via `CommandRecordingState` |
+| D3D12 | ✅ Supported | `ExecuteIndirect` via `CommandRecordingState` |
 | Vulkan | ✅ Supported | `vkCmdDrawIndexedIndirect` (multi-draw or loop fallback) |
 | OpenGL Core | ✅ Supported | `glMultiDrawElementsIndirect` |
 | OpenGL ES 3.1+ | ✅ Supported | `glMultiDrawElementsIndirect` |
@@ -64,7 +64,6 @@ Measured as total `PlayerLoop` time (not just command submission) in the build, 
 ## Limitations
 
 - **D3D11 + RenderDoc**: The plugin uses NvAPI, which can cause Unity to crash when RenderDoc attempts to inject at runtime. To avoid this, attach RenderDoc **at Unity startup** (launch Unity from RenderDoc) rather than connecting mid-session.
-- **D3D12 + Unity Editor**: Native MDI on D3D12 breaks the Editor's rendering. The plugin works correctly in **standalone builds only**. In the Editor, it automatically falls back to a `DrawProceduralIndirect` loop, so do not use the Editor to benchmark D3D12 MDI performance — build the project and profile the player instead.
 - **D3D11 + AMD GPUs**: D3D11 does not have a native MDI API. On NVIDIA, this is solved via NvAPI, which can attach to an already-created D3D11 device. AMD has an equivalent extension in AGS (`agsDriverExtensionsDX11_MultiDrawIndexedInstancedIndirect`), but AGS requires the D3D11 device to be created through `agsDriverExtensionsDX11_CreateDevice` — since Unity creates the device itself, AGS extensions cannot be enabled retroactively. Because of this (and lack of AMD hardware for testing), MDI on D3D11 + AMD is not currently supported. AMD GPUs are fully supported under D3D12, Vulkan, and OpenGL.
 - **Metal**: Metal supports indirect command buffers (`MTLIndirectCommandBuffer` / `executeCommandsInBuffer`), so a native MDI backend is feasible. It is not yet implemented because the author does not currently have access to a macOS/iOS device for testing.
 - **Consoles & mobile devices**: The plugin has only been tested on desktop Windows. It has not been verified on consoles (PlayStation, Xbox, Switch) or mobile devices — support on these platforms is not guaranteed.
