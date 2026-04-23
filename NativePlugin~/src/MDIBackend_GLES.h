@@ -19,6 +19,8 @@ private:
     void CreateInstanceIDBuffer();
     void BindInstanceIDAttribute();
 
+    static GLuint GetDrawMode(uint32_t topology);
+
     PFNGLDRAWELEMENTSINDIRECTPROC _glDrawElementsIndirect = nullptr;
     PFNGLMULTIDRAWELEMENTSINDIRECTEXTPROC _glMultiDrawElementsIndirectEXT = nullptr;
     PFNGLBINDBUFFERPROC _glBindBuffer = nullptr;

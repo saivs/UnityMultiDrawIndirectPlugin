@@ -315,11 +315,12 @@ void MDIBackend_GLES::ExecuteMDI(const MDIParams& params)
     // Bind the indirect args buffer
     _glBindBuffer(GL_DRAW_INDIRECT_BUFFER, argsBufferGL);
 
+    const auto drawMode = GetDrawMode(params.topology);
 
     if (_multiDrawIndirectSupported)
     {
         _glMultiDrawElementsIndirectEXT(
-            GL_TRIANGLES,
+            drawMode,
             indexType,
             reinterpret_cast<const void*>(static_cast<uintptr_t>(params.argsOffsetBytes)),
             static_cast<GLsizei>(params.maxDrawCount),
@@ -333,7 +334,7 @@ void MDIBackend_GLES::ExecuteMDI(const MDIParams& params)
         for (uint32_t i = 0; i < params.maxDrawCount; ++i)
         {
             _glDrawElementsIndirect(
-                GL_TRIANGLES,
+                drawMode,
                 indexType,
                 reinterpret_cast<const void*>(offset)
             );
@@ -345,6 +346,24 @@ void MDIBackend_GLES::ExecuteMDI(const MDIParams& params)
     // Restore Unity's state
     _glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
     _glBindVertexArray(static_cast<GLuint>(prevVAO));
+}
+
+GLuint MDIBackend_GLES::GetDrawMode(const uint32_t topology)
+{
+    switch (topology)
+    {
+        // MeshTopology.Triangles
+        default:
+        case 0:
+            return GL_TRIANGLES;
+            // MeshTopology.Lines
+        case 3:
+            return GL_LINES;
+        case 4:
+            return GL_LINE_STRIP;
+        case 5:
+            return GL_POINTS;
+    }
 }
 
 bool MDIBackend_GLES::IsSupported() const

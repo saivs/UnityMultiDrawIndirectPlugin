@@ -37,6 +37,7 @@ namespace Saivs.Graphics.Core.MDI
             public uint argsOffsetBytes;
             public uint maxDrawCount;
             public uint indexFormat;
+            public uint topology;
         }
 
         // Native imports
@@ -147,7 +148,12 @@ namespace Saivs.Graphics.Core.MDI
                 _paramsRing.Dispose();
             _dummyArgsBuffer?.Dispose();
             _dummyArgsBuffer = null;
-            if (_primeMesh != null) { UnityEngine.Object.DestroyImmediate(_primeMesh); _primeMesh = null; }
+
+            foreach (var pair in _primeMeshes)
+                UnityEngine.Object.DestroyImmediate(pair.Value);
+
+            _primeMeshes.Clear();
+
             _initialized = false;
         }
 
@@ -157,6 +163,7 @@ namespace Saivs.Graphics.Core.MDI
             GraphicsBuffer indexBuffer,
             int argsStartIndex,
             int argsCount,
+            MeshTopology topology,
             out int slot)
         {
             slot = MDI_AllocSlot();
@@ -168,6 +175,7 @@ namespace Saivs.Graphics.Core.MDI
                 argsOffsetBytes = (uint)(argsStartIndex * INDIRECT_DRAW_INDEXED_ARGS_SIZE),
                 maxDrawCount = (uint)argsCount,
                 indexFormat = 1, // R32_UINT
+                topology = (uint)topology,
             };
 
             return (IntPtr)((NativeMDIParams*)_paramsRing.GetUnsafeReadOnlyPtr() + slot);
@@ -178,7 +186,7 @@ namespace Saivs.Graphics.Core.MDI
         // -----------------------------------------------------------------------
         private static bool _usesPerInstanceVB;
         private static bool _perInstanceVBChecked;
-        private static Mesh _primeMesh;
+        private static Dictionary<MeshTopology, Mesh> _primeMeshes;
 
         private static bool UsesPerInstanceVB
         {
@@ -198,21 +206,44 @@ namespace Saivs.Graphics.Core.MDI
         // When Unity renders this mesh, it creates a PSO with TEXCOORD7
         // in the input layout — our native hook then modifies it to be
         // per-instance on VB slot 15.
-        private static Mesh GetPrimeMesh()
+        private static Mesh GetPrimeMesh(MeshTopology topology)
         {
-            if (_primeMesh != null) return _primeMesh;
+            if (_primeMeshes.TryGetValue(topology, out var mesh))
+                return mesh;
 
-            _primeMesh = new Mesh { name = "MDI_PrimeMesh" };
-            _primeMesh.SetVertexBufferParams(3,
+            mesh = new Mesh {
+                name = $"MDI_PrimeMesh_{topology}",
+                hideFlags = HideFlags.HideAndDontSave
+            };
+
+            mesh.SetVertexBufferParams(3,
                 new VertexAttributeDescriptor(VertexAttribute.Position, VertexAttributeFormat.Float32, 3, stream: 0),
                 new VertexAttributeDescriptor(VertexAttribute.TexCoord7, VertexAttributeFormat.UInt32, 1, stream: 1)
             );
-            _primeMesh.SetVertexBufferData(new Vector3[3], 0, 0, 3, stream: 0);
-            _primeMesh.SetVertexBufferData(new uint[3], 0, 0, 3, stream: 1);
-            _primeMesh.SetIndices(new int[] { 0, 1, 2 }, MeshTopology.Triangles, 0);
-            _primeMesh.bounds = new Bounds(Vector3.zero, Vector3.one * 10000);
 
-            return _primeMesh;
+            mesh.SetVertexBufferData(new Vector3[3], 0, 0, 3, stream: 0);
+            mesh.SetVertexBufferData(new uint[3], 0, 0, 3, stream: 1);
+
+            // Set the indices based on the requested topology
+            switch (topology)
+            {
+                case MeshTopology.Lines:
+                    mesh.SetIndices(new int[] { 0, 1 }, MeshTopology.Lines, 0);
+                    break;
+                case MeshTopology.Points:
+                    mesh.SetIndices(new int[] { 0 }, MeshTopology.Points, 0);
+                    break;
+                case MeshTopology.Triangles:
+                default:
+                    mesh.SetIndices(new int[] { 0, 1, 2 }, MeshTopology.Triangles, 0);
+                    break;
+            }
+
+            mesh.bounds = new Bounds(Vector3.zero, Vector3.one * 10000);
+
+            _primeMeshes[topology] = mesh;
+
+            return mesh;
         }
 
         public static void MultiDrawIndexedIndirect(
@@ -235,14 +266,14 @@ namespace Saivs.Graphics.Core.MDI
                 // input layout includes TEXCOORD7 (our hook patches it to
                 // per-instance on VB slot 15). Zero-area triangle = no pixels.
                 if (UsesPerInstanceVB)
-                    cmd.DrawMesh(GetPrimeMesh(), Matrix4x4.identity, material, 0, shaderPass, properties);
+                    cmd.DrawMesh(GetPrimeMesh(topology), Matrix4x4.identity, material, 0, shaderPass, properties);
                 else
                     cmd.DrawProceduralIndirect(
                         indexBuffer: indexBuffer, matrix: Matrix4x4.identity, material: material,
                         shaderPass: shaderPass, topology: topology, bufferWithArgs: _dummyArgsBuffer,
                         argsOffset: 0, properties: properties);
 
-                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, out int slot);
+                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, topology, out int slot);
                 cmd.IssuePluginEventAndData(_renderEventAndDataFunc, _baseEventID + slot, dataPtr);
             }
             else
@@ -277,14 +308,14 @@ namespace Saivs.Graphics.Core.MDI
             if (_supported && argsCount > 1)
             {
                 if (UsesPerInstanceVB)
-                    cmd.DrawMesh(GetPrimeMesh(), Matrix4x4.identity, material, 0, shaderPass, properties);
+                    cmd.DrawMesh(GetPrimeMesh(topology), Matrix4x4.identity, material, 0, shaderPass, properties);
                 else
                     cmd.DrawProceduralIndirect(
                         indexBuffer: indexBuffer, matrix: Matrix4x4.identity, material: material,
                         shaderPass: shaderPass, topology: topology, bufferWithArgs: _dummyArgsBuffer,
                         argsOffset: 0, properties: properties);
 
-                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, out int slot);
+                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, topology, out int slot);
                 cmd.IssuePluginEventAndData(_renderEventAndDataFunc, _baseEventID + slot, dataPtr);
             }
             else
@@ -318,14 +349,14 @@ namespace Saivs.Graphics.Core.MDI
             if (_supported && argsCount > 1)
             {
                 if (UsesPerInstanceVB)
-                    cmd.DrawMesh(GetPrimeMesh(), Matrix4x4.identity, material, 0, shaderPass, properties);
+                    cmd.DrawMesh(GetPrimeMesh(topology), Matrix4x4.identity, material, 0, shaderPass, properties);
                 else
                     cmd.DrawProceduralIndirect(
                         indexBuffer: indexBuffer, matrix: Matrix4x4.identity, material: material,
                         shaderPass: shaderPass, topology: topology, bufferWithArgs: _dummyArgsBuffer,
                         argsOffset: 0, properties: properties);
 
-                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, out int slot);
+                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, topology, out int slot);
                 cmd.IssuePluginEventAndData(_renderEventAndDataFunc, _baseEventID + slot, dataPtr);
             }
             else

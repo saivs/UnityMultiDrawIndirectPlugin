@@ -598,8 +598,24 @@ void MDIBackend_D3D12::ExecuteMDI(const MDIParams& params)
         cmdList->IASetVertexBuffers(kInstanceVBSlot, 1, &vbView);
     }
 
-    // Set triangle list topology (prime DrawMesh may have set a different one)
-    cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    switch (params.topology)
+    {
+        // MeshTopology.Triangles
+        default:
+        case 0:
+            cmdList->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            break;
+            // MeshTopology.Lines
+        case 3:
+            cmdList->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
+            break;
+        case 4:
+            cmdList->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINESTRIP);
+            break;
+        case 5:
+            cmdList->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
+            break;
+    }
 
     // Single ExecuteIndirect — true multi-draw indirect
     cmdList->ExecuteIndirect(

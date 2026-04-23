@@ -11,6 +11,7 @@ struct MDIParams
     uint32_t argsOffsetBytes;     // Byte offset into the args buffer
     uint32_t maxDrawCount;        // Number of draw commands to execute
     uint32_t indexFormat;         // 0 = R16_UINT, 1 = R32_UINT
+    uint32_t topology;            // 0 - triangle list, 3 - line list, 4 - line strip, 5 - point list
 };
 
 static constexpr int MDI_MAX_PENDING = 256;
