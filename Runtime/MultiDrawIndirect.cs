@@ -1,5 +1,6 @@
 using System;
 using System.Reflection;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
@@ -110,6 +111,9 @@ namespace Saivs.Graphics.Core.MDI
             try
             {
                 _supported = MDI_IsSupported() != 0;
+
+                _primeMeshes = new Dictionary<MeshTopology, Mesh>();
+
                 if (_supported)
                 {
                     _baseEventID = MDI_GetBaseEventID();
