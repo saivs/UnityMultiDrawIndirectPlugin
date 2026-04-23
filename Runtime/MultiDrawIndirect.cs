@@ -111,6 +111,9 @@ namespace Saivs.Graphics.Core.MDI
             try
             {
                 _supported = MDI_IsSupported() != 0;
+
+                _primeMeshes = new Dictionary<MeshTopology, Mesh>();
+
                 if (_supported)
                 {
                     _baseEventID = MDI_GetBaseEventID();
