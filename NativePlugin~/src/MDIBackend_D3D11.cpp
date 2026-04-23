@@ -314,8 +314,24 @@ void MDIBackend_D3D11::ExecuteMDI(const MDIParams& params)
         _context->IASetVertexBuffers(kInstanceVBSlot, 1, &_instanceIDBuffer, &vbStride, &vbOffset);
     }
 
-    // Set triangle list topology
-    _context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    switch (params.topology)
+    {
+        // MeshTopology.Triangles
+        default:
+        case 0:
+            _context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            break;
+        // MeshTopology.Lines
+        case 3:
+            _context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
+            break;
+        case 4:
+            _context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINESTRIP);
+            break;
+        case 5:
+            _context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
+            break;
+    }
 
     // Debug marker
     if (_annotation)
