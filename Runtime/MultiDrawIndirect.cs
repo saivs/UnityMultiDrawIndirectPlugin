@@ -49,6 +49,9 @@ namespace Saivs.Graphics.Core.MDI
         [DllImport(DLL_NAME)] private static extern int MDI_UsesPerInstanceVB();
         [DllImport(DLL_NAME)] private static extern int MDI_SetMaxInstanceCount(uint maxCount);
         [DllImport(DLL_NAME)] private static extern uint MDI_GetMaxInstanceCount();
+        [DllImport(DLL_NAME)] private static extern void MDI_SetDummyArgsBuffer(IntPtr nativePtr);
+        [DllImport(DLL_NAME)] private static extern void MDI_SetParamsRing(IntPtr basePtr);
+        [DllImport(DLL_NAME)] private static extern void MDI_SetDrawIndexBuffer(IntPtr nativePtr);
 
         private static IntPtr _renderEventAndDataFunc;
         private static bool _initialized;
@@ -60,6 +63,13 @@ namespace Saivs.Graphics.Core.MDI
 
         // dummy args buffer (instanceCount=0) for zero-pixel prime draw
         private static GraphicsBuffer _dummyArgsBuffer;
+
+        // Per-draw index buffer used by the Metal backend. Holds [0, 1, …, MAX_PENDING-1]
+        // as uint32; the native swizzle re-binds it with offset = i*4 between each
+        // indirect draw, so the shader's `_MDI_DrawIndex_Buffer[0]` reads `i`.
+        // No-op on other platforms.
+        private static GraphicsBuffer _drawIndexBuffer;
+        private static readonly int s_DrawIndexBufferID = Shader.PropertyToID("_MDI_DrawIndex_Buffer");
 
         public static bool IsSupported
         {
@@ -120,10 +130,31 @@ namespace Saivs.Graphics.Core.MDI
                     _renderEventAndDataFunc = MDI_GetRenderEventAndDataFunc();
                     _paramsRing = new NativeArray<NativeMDIParams>(MAX_PENDING, Allocator.Persistent);
 
+                    // MAX_PENDING entries so we can encode the ring-buffer slot
+                    // into argsOffset for each prime draw — the Metal backend
+                    // recovers the slot in its method-swizzling hook.
                     _dummyArgsBuffer = new GraphicsBuffer(
-                        GraphicsBuffer.Target.IndirectArguments, 1,
+                        GraphicsBuffer.Target.IndirectArguments, MAX_PENDING,
                         GraphicsBuffer.IndirectDrawIndexedArgs.size);
-                    _dummyArgsBuffer.SetData(new GraphicsBuffer.IndirectDrawIndexedArgs[1]);
+                    _dummyArgsBuffer.SetData(new GraphicsBuffer.IndirectDrawIndexedArgs[MAX_PENDING]);
+
+                    // Per-draw-index buffer for the Metal backend. Pre-fill with
+                    // [0, 1, …, MAX_PENDING-1]; the native swizzle re-binds with
+                    // offset = i*4 between each draw inside the prime.
+                    var drawIndices = new uint[MAX_PENDING];
+                    for (int i = 0; i < MAX_PENDING; i++) drawIndices[i] = (uint)i;
+                    _drawIndexBuffer = new GraphicsBuffer(
+                        GraphicsBuffer.Target.Structured, MAX_PENDING, sizeof(uint));
+                    _drawIndexBuffer.SetData(drawIndices);
+                    Shader.SetGlobalBuffer(s_DrawIndexBufferID, _drawIndexBuffer);
+
+                    try
+                    {
+                        MDI_SetDummyArgsBuffer(_dummyArgsBuffer.GetNativeBufferPtr());
+                        MDI_SetDrawIndexBuffer(_drawIndexBuffer.GetNativeBufferPtr());
+                        unsafe { MDI_SetParamsRing((IntPtr)_paramsRing.GetUnsafeReadOnlyPtr()); }
+                    }
+                    catch (EntryPointNotFoundException) { /* older native plugin — ignore */ }
 
                     var api = SystemInfo.graphicsDeviceType;
                     Debug.Log($"[MDI] Initialized: {api}, baseEventID={_baseEventID}");
@@ -152,6 +183,8 @@ namespace Saivs.Graphics.Core.MDI
                 _paramsRing.Dispose();
             _dummyArgsBuffer?.Dispose();
             _dummyArgsBuffer = null;
+            _drawIndexBuffer?.Dispose();
+            _drawIndexBuffer = null;
 
             foreach (var pair in _primeMeshes)
                 UnityEngine.Object.DestroyImmediate(pair.Value);
@@ -265,6 +298,12 @@ namespace Saivs.Graphics.Core.MDI
 
             if (_supported && argsCount > 1)
             {
+                // Stage params into the ring buffer FIRST so we know which slot
+                // this draw owns. The slot is encoded in the prime's argsOffset
+                // — the Metal backend reads it back from inside its
+                // drawIndexedPrimitives swizzle hook.
+                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, topology, out int slot);
+
                 // Prime draw: sets PSO + render state on the command list.
                 // On D3D11/D3D12, use a Mesh with TEXCOORD7 to force a PSO whose
                 // input layout includes TEXCOORD7 (our hook patches it to
@@ -275,9 +314,8 @@ namespace Saivs.Graphics.Core.MDI
                     cmd.DrawProceduralIndirect(
                         indexBuffer: indexBuffer, matrix: Matrix4x4.identity, material: material,
                         shaderPass: shaderPass, topology: topology, bufferWithArgs: _dummyArgsBuffer,
-                        argsOffset: 0, properties: properties);
+                        argsOffset: slot * INDIRECT_DRAW_INDEXED_ARGS_SIZE, properties: properties);
 
-                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, topology, out int slot);
                 cmd.IssuePluginEventAndData(_renderEventAndDataFunc, _baseEventID + slot, dataPtr);
             }
             else
@@ -311,15 +349,16 @@ namespace Saivs.Graphics.Core.MDI
 
             if (_supported && argsCount > 1)
             {
+                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, topology, out int slot);
+
                 if (UsesPerInstanceVB)
                     cmd.DrawMesh(GetPrimeMesh(topology), Matrix4x4.identity, material, 0, shaderPass, properties);
                 else
                     cmd.DrawProceduralIndirect(
                         indexBuffer: indexBuffer, matrix: Matrix4x4.identity, material: material,
                         shaderPass: shaderPass, topology: topology, bufferWithArgs: _dummyArgsBuffer,
-                        argsOffset: 0, properties: properties);
+                        argsOffset: slot * INDIRECT_DRAW_INDEXED_ARGS_SIZE, properties: properties);
 
-                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, topology, out int slot);
                 cmd.IssuePluginEventAndData(_renderEventAndDataFunc, _baseEventID + slot, dataPtr);
             }
             else
@@ -352,15 +391,16 @@ namespace Saivs.Graphics.Core.MDI
 
             if (_supported && argsCount > 1)
             {
+                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, topology, out int slot);
+
                 if (UsesPerInstanceVB)
                     cmd.DrawMesh(GetPrimeMesh(topology), Matrix4x4.identity, material, 0, shaderPass, properties);
                 else
                     cmd.DrawProceduralIndirect(
                         indexBuffer: indexBuffer, matrix: Matrix4x4.identity, material: material,
                         shaderPass: shaderPass, topology: topology, bufferWithArgs: _dummyArgsBuffer,
-                        argsOffset: 0, properties: properties);
+                        argsOffset: slot * INDIRECT_DRAW_INDEXED_ARGS_SIZE, properties: properties);
 
-                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, topology, out int slot);
                 cmd.IssuePluginEventAndData(_renderEventAndDataFunc, _baseEventID + slot, dataPtr);
             }
             else

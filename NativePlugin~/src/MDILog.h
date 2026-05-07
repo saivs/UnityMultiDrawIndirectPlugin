@@ -9,14 +9,15 @@
 
 inline void DebugLog(const char* fmt, ...)
 {
-#ifdef _WIN32
     char buf[512];
     va_list args;
     va_start(args, fmt);
     vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
+#ifdef _WIN32
     OutputDebugStringA(buf);
 #else
-    (void)fmt;
+    fputs(buf, stderr);
+    fflush(stderr);
 #endif
 }

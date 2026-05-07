@@ -4,6 +4,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stddef.h>
 
 #ifdef _WIN32
 #define GL_APIENTRY __stdcall
