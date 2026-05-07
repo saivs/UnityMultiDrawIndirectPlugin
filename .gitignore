@@ -73,3 +73,13 @@ crashlytics-build.properties
 # Temporary auto-generated Android Assets
 /[Aa]ssets/[Ss]treamingAssets/aa.meta
 /[Aa]ssets/[Ss]treamingAssets/aa/*
+
+# macOS Finder / system metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Native plugin build output
+NativePlugin~/build/
+NativePlugin~/build_macos/

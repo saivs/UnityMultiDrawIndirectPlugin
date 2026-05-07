@@ -12,6 +12,9 @@
 #endif
 #include "MDIBackend_Vulkan.h"
 #include "MDIBackend_GLES.h"
+#if defined(__APPLE__)
+#include "MDIBackend_Metal.h"
+#endif
 
 static IUnityInterfaces* g_unityInterfaces = nullptr;
 static IUnityGraphics*   g_graphics        = nullptr;
@@ -19,8 +22,9 @@ static IMDIBackend*      g_backend         = nullptr;
 static MDIBackend_Stub   g_stubBackend;
 static int               g_backendSupported = 0;
 
-// Pending params ring buffer — shared by D3D11 and D3D12 paths
-static MDIParams g_pending[MDI_MAX_PENDING] = {};
+// Pending params ring buffer — shared by D3D11/D3D12/Metal paths.
+// Not static — Metal backend reads it from its method-swizzling hook.
+MDIParams g_pending[MDI_MAX_PENDING] = {};
 static volatile int g_pendingCounter = 0;
 
 // Reserved event ID range — prevents clashes with Unity internals and other plugins
@@ -65,6 +69,16 @@ static IMDIBackend* CreateBackend(UnityGfxRenderer renderer)
         delete backend;
         return &g_stubBackend;
     }
+#if defined(__APPLE__)
+    case kUnityGfxRendererMetal:
+    {
+        auto* backend = new MDIBackend_Metal();
+        if (backend->Initialize(g_unityInterfaces))
+            return backend;
+        delete backend;
+        return &g_stubBackend;
+    }
+#endif
     default:
         return &g_stubBackend;
     }
@@ -188,6 +202,42 @@ extern "C" int UNITY_INTERFACE_EXPORT UNITY_INTERFACE_API
 MDI_AllocSlot()
 {
     return (g_pendingCounter++) % MDI_MAX_PENDING;
+}
+
+#if defined(__APPLE__)
+extern "C" void MDIMetal_SetDummyArgsBuffer(void* nativePtr);
+extern "C" void MDIMetal_SetParamsRing(const MDIParams* basePtr);
+extern "C" void MDIMetal_SetDrawIndexBuffer(void* nativePtr);
+#endif
+
+extern "C" void UNITY_INTERFACE_EXPORT UNITY_INTERFACE_API
+MDI_SetDummyArgsBuffer(void* nativePtr)
+{
+#if defined(__APPLE__)
+    MDIMetal_SetDummyArgsBuffer(nativePtr);
+#else
+    (void)nativePtr;
+#endif
+}
+
+extern "C" void UNITY_INTERFACE_EXPORT UNITY_INTERFACE_API
+MDI_SetParamsRing(const MDIParams* basePtr)
+{
+#if defined(__APPLE__)
+    MDIMetal_SetParamsRing(basePtr);
+#else
+    (void)basePtr;
+#endif
+}
+
+extern "C" void UNITY_INTERFACE_EXPORT UNITY_INTERFACE_API
+MDI_SetDrawIndexBuffer(void* nativePtr)
+{
+#if defined(__APPLE__)
+    MDIMetal_SetDrawIndexBuffer(nativePtr);
+#else
+    (void)nativePtr;
+#endif
 }
 
 extern "C" int UNITY_INTERFACE_EXPORT UNITY_INTERFACE_API
