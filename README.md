@@ -84,7 +84,7 @@ Measured as total `PlayerLoop` time (not just command submission) in the build, 
 - **D3D11 + RenderDoc**: The plugin uses NvAPI, which can cause Unity to crash when RenderDoc attempts to inject at runtime. To avoid this, attach RenderDoc **at Unity startup** (launch Unity from RenderDoc) rather than connecting mid-session.
 - **D3D11 + AMD GPUs**: D3D11 does not have a native MDI API. On NVIDIA, this is solved via NvAPI, which can attach to an already-created D3D11 device. AMD has an equivalent extension in AGS (`agsDriverExtensionsDX11_MultiDrawIndexedInstancedIndirect`), but AGS requires the D3D11 device to be created through `agsDriverExtensionsDX11_CreateDevice` — since Unity creates the device itself, AGS extensions cannot be enabled retroactively. Because of this (and lack of AMD hardware for testing), MDI on D3D11 + AMD is not currently supported. AMD GPUs are fully supported under D3D12, Vulkan, and OpenGL.
 - **Consoles & mobile devices**: The plugin has only been tested on desktop Windows and macOS. It has not been verified on consoles (PlayStation, Xbox, Switch) or mobile devices — support on these platforms is not guaranteed.
-- **No Unity Mesh support**: The plugin currently uses `DrawProceduralIndirect` / `ExecuteIndirect`, which do not bind a Unity `Mesh` object. Vertex data must be stored in `StructuredBuffer` or `GraphicsBuffer` and fetched manually by `SV_VertexID` in the shader. This is standard practice for GPU-driven pipelines, but means you cannot pass a `Mesh` directly. Adding Mesh support is feasible — the prime draw already uses `DrawMesh` with a `TEXCOORD7` layout on D3D11/D3D12, so extending this to bind the user's actual Mesh (and its vertex/index buffers) instead of a dummy is a natural next step.
+- **Unity Mesh support — partial**: A second extension method, `cmd.MultiDrawMeshIndirect`, accepts a Unity `Mesh` directly so you can write shaders with the standard `POSITION` / `NORMAL` semantics instead of fetching vertex data from a `StructuredBuffer`. True MDI through this API currently routes through the native plugin only on **Metal, Vulkan and WebGPU** — backends whose `MDI.hlsl` branch resolves the global instance ID through `SV_InstanceID`. On D3D11, D3D12 and OpenGL/GLES the user shader expects a `TEXCOORD7` element which arbitrary user meshes don't carry, so the mesh API falls back to a per-draw `DrawMeshInstancedIndirect` loop and emits a one-time warning. The original `cmd.MultiDrawIndexedIndirect` (procedural, vertex pulling from `StructuredBuffer`) remains the fully-supported path on every backend.
 - **Identity buffer instance limit (D3D11/D3D12/OpenGL/GLES)**: The per-instance identity buffer defaults to 65,536 entries. For any draw command in an MDI batch, `startInstance + instanceCount` must not exceed this value. Use `MultiDrawIndirect.MaxInstanceCount` to increase or decrease the limit at runtime. This limitation does not apply to Vulkan.
 
 ## Installation
@@ -100,7 +100,11 @@ Add the package via Unity Package Manager using a git URL:
 
 ## Usage
 
-The plugin exposes a single extension method on `CommandBuffer` (and `RasterCommandBuffer` / `UnsafeCommandBuffer` in Unity 6+):
+The plugin exposes two extension methods on `CommandBuffer` (and `RasterCommandBuffer` / `UnsafeCommandBuffer` in Unity 6+): an indexed/procedural form (`MultiDrawIndexedIndirect`, supported on every backend) and a Mesh form (`MultiDrawMeshIndirect`, true MDI on Metal / Vulkan / WebGPU; loop fallback elsewhere — see Limitations).
+
+### Indexed / procedural — `cmd.MultiDrawIndexedIndirect`
+
+The shader pulls vertex data from a `StructuredBuffer` indexed by `SV_VertexID`. Works on every backend.
 
 ```csharp
 using Saivs.Graphics.Core.MDI;
@@ -123,14 +127,7 @@ cmd.MultiDrawIndexedIndirect(
 
 That's it — one call replaces the entire draw loop. When the native plugin is available, all draws are batched into a single MDI command. Otherwise, it falls back to a `DrawProceduralIndirect` loop automatically.
 
-### Shader
-
-The plugin provides `MDI.hlsl` with two macros that handle cross-platform instance ID resolution automatically:
-
-| Macro | Purpose |
-|---|---|
-| `MDI_INSTANCE_ID_PARAMETER` | Place in vertex shader signature — expands to the correct platform-specific parameter |
-| `MDI_INSTANCE_ID` | Use in vertex shader body — resolves to the global instance index across all draw commands |
+Matching vertex shader — vertex data fetched manually from a `StructuredBuffer` via `SV_VertexID`:
 
 ```hlsl
 HLSLPROGRAM
@@ -148,6 +145,60 @@ VertexOutput vert(uint vertexID : SV_VertexID, MDI_INSTANCE_ID_PARAMETER)
 }
 ENDHLSL
 ```
+
+### Mesh — `cmd.MultiDrawMeshIndirect`
+
+Pass a Unity `Mesh` directly. Vertices come through the standard input assembler so the shader can use the regular `POSITION` / `NORMAL` / `TEXCOORD0` semantics instead of `SV_VertexID` + `StructuredBuffer`.
+
+```csharp
+using Saivs.Graphics.Core.MDI;
+
+cmd.MultiDrawMeshIndirect(
+    mesh:           mesh,
+    material:       material,
+    properties:     propertyBlock,
+    shaderPass:     0,
+    bufferWithArgs: argsBuffer,
+    argsStartIndex: 0,
+    argsCount:      drawCount
+);
+```
+
+The `argsBuffer` layout is identical to `MultiDrawIndexedIndirect` (`GraphicsBuffer.IndirectDrawIndexedArgs`). Each entry's `startIndex` / `baseVertexIndex` directly drives which slice of the mesh's index/vertex buffer is read for that draw — letting you scatter different shapes across the batch by combining several meshes into one and indexing them through args. Multi-submesh meshes aren't addressed via a `submeshIndex` parameter; encode whatever slice you need directly through `startIndex` / `baseVertexIndex` / `indexCountPerInstance`.
+
+Matching vertex shader — vertex data arrives through the standard semantics:
+
+```hlsl
+HLSLPROGRAM
+#pragma vertex vert
+#pragma fragment frag
+
+#include "Packages/com.saivs.multi-draw-indirect/Runtime/ShaderLibrary/MDI.hlsl"
+
+struct Attributes
+{
+    float4 positionOS : POSITION;
+    float3 normalOS   : NORMAL;
+};
+
+VertexOutput vert(Attributes input, MDI_INSTANCE_ID_PARAMETER)
+{
+    uint globalInstanceID = MDI_INSTANCE_ID;
+    // ... transform input.positionOS, fetch per-instance data by globalInstanceID, etc.
+}
+ENDHLSL
+```
+
+**Backend support.** True MDI through this API currently runs on Metal, Vulkan and WebGPU — backends whose `MDI.hlsl` branch resolves `MDI_INSTANCE_ID` through `SV_InstanceID` and therefore don't require a `TEXCOORD7` input element on the user's mesh. On D3D11, D3D12 and OpenGL/GLES the call falls back to a per-draw `DrawMeshInstancedIndirect` loop with a one-time warning. The mesh's `indexBufferTarget` is augmented with `Raw` automatically the first time it's seen, so `mesh.GetIndexBuffer()` returns a buffer the native plugin can address.
+
+### `MDI.hlsl` macros
+
+Both APIs above share two macros that handle cross-platform instance ID resolution automatically:
+
+| Macro | Purpose |
+|---|---|
+| `MDI_INSTANCE_ID_PARAMETER` | Place in vertex shader signature — expands to the correct platform-specific parameter |
+| `MDI_INSTANCE_ID` | Use in vertex shader body — resolves to the global instance index across all draw commands |
 
 The macros expand differently depending on the platform and compile-time defines:
 

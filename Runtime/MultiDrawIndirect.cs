@@ -201,6 +201,7 @@ namespace Saivs.Graphics.Core.MDI
             int argsStartIndex,
             int argsCount,
             MeshTopology topology,
+            uint indexFormat,
             out int slot)
         {
             slot = MDI_AllocSlot();
@@ -211,12 +212,17 @@ namespace Saivs.Graphics.Core.MDI
                 indexBuffer = indexBuffer.GetNativeBufferPtr(),
                 argsOffsetBytes = (uint)(argsStartIndex * INDIRECT_DRAW_INDEXED_ARGS_SIZE),
                 maxDrawCount = (uint)argsCount,
-                indexFormat = 1, // R32_UINT
+                indexFormat = indexFormat,
                 topology = (uint)topology,
             };
 
             return (IntPtr)((NativeMDIParams*)_paramsRing.GetUnsafeReadOnlyPtr() + slot);
         }
+
+        // Index format codes — match Metal MTLIndexType / native plugin's expectations.
+        // 0 = UInt16, 1 = UInt32.
+        private static uint EncodeIndexFormat(IndexFormat fmt)
+            => fmt == IndexFormat.UInt16 ? 0u : 1u;
 
         // -----------------------------------------------------------------------
         // CommandBuffer extension
@@ -283,6 +289,57 @@ namespace Saivs.Graphics.Core.MDI
             return mesh;
         }
 
+        // -----------------------------------------------------------------------
+        // Mesh-based MDI helpers
+        // -----------------------------------------------------------------------
+
+        // Cached HashSet of mesh instance IDs whose `indexBufferTarget` we've
+        // already ensured includes Raw, so `mesh.GetIndexBuffer()` returns a
+        // GPU-readable buffer the native plugin can address.
+        private static readonly HashSet<int> _meshesPrepared = new HashSet<int>();
+        private static bool _meshFallbackWarned;
+
+        // True when the current backend's MDI.hlsl branch routes the global
+        // instance ID through SV_InstanceID — i.e. Metal (per-draw bytes),
+        // Vulkan and WebGPU (firstInstance baked in by the indirect args).
+        // These backends accept arbitrary user meshes because the shader has
+        // no TEXCOORD7 input requirement. On D3D11/D3D12/OpenGL the shader
+        // expects TEXCOORD7 in the vertex input layout — without it the
+        // mesh path can't render correctly without mesh cloning.
+        private static bool MeshApiSupportedNatively
+        {
+            get
+            {
+                var api = SystemInfo.graphicsDeviceType;
+                return api == GraphicsDeviceType.Metal
+                    || api == GraphicsDeviceType.Vulkan
+                    || api == GraphicsDeviceType.WebGPU;
+            }
+        }
+
+        private static GraphicsBuffer EnsureMeshIndexBuffer(Mesh mesh)
+        {
+            int id = mesh.GetInstanceID();
+            if (!_meshesPrepared.Contains(id))
+            {
+                mesh.indexBufferTarget |= GraphicsBuffer.Target.Raw;
+                _meshesPrepared.Add(id);
+            }
+            return mesh.GetIndexBuffer();
+        }
+
+        private static void WarnMeshFallbackOnce()
+        {
+            if (_meshFallbackWarned) return;
+            _meshFallbackWarned = true;
+            Debug.LogWarning(
+                $"[MDI] MultiDrawMeshIndirect: true MDI is currently supported only on " +
+                $"Metal, Vulkan and WebGPU. Current backend ({SystemInfo.graphicsDeviceType}) " +
+                $"falls back to a per-draw DrawMeshInstancedIndirect loop, and the user shader " +
+                $"must not require TEXCOORD7 in its vertex input layout (i.e. should not include " +
+                $"the default MDI_INSTANCE_ID_PARAMETER macro from MDI.hlsl on these APIs).");
+        }
+
         public static void MultiDrawIndexedIndirect(
             this CommandBuffer cmd,
             GraphicsBuffer indexBuffer,
@@ -302,7 +359,7 @@ namespace Saivs.Graphics.Core.MDI
                 // this draw owns. The slot is encoded in the prime's argsOffset
                 // — the Metal backend reads it back from inside its
                 // drawIndexedPrimitives swizzle hook.
-                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, topology, out int slot);
+                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, topology, indexFormat: 1, out int slot);
 
                 // Prime draw: sets PSO + render state on the command list.
                 // On D3D11/D3D12, use a Mesh with TEXCOORD7 to force a PSO whose
@@ -349,7 +406,7 @@ namespace Saivs.Graphics.Core.MDI
 
             if (_supported && argsCount > 1)
             {
-                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, topology, out int slot);
+                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, topology, indexFormat: 1, out int slot);
 
                 if (UsesPerInstanceVB)
                     cmd.DrawMesh(GetPrimeMesh(topology), Matrix4x4.identity, material, 0, shaderPass, properties);
@@ -391,7 +448,7 @@ namespace Saivs.Graphics.Core.MDI
 
             if (_supported && argsCount > 1)
             {
-                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, topology, out int slot);
+                IntPtr dataPtr = WriteParams(bufferWithArgs, indexBuffer, argsStartIndex, argsCount, topology, indexFormat: 1, out int slot);
 
                 if (UsesPerInstanceVB)
                     cmd.DrawMesh(GetPrimeMesh(topology), Matrix4x4.identity, material, 0, shaderPass, properties);
@@ -411,6 +468,132 @@ namespace Saivs.Graphics.Core.MDI
                         indexBuffer: indexBuffer, matrix: Matrix4x4.identity, material: material,
                         shaderPass: shaderPass, topology: topology, bufferWithArgs: bufferWithArgs,
                         argsOffset: (argsStartIndex + i) * INDIRECT_DRAW_INDEXED_ARGS_SIZE, properties: properties);
+                }
+            }
+        }
+#endif
+
+        // -----------------------------------------------------------------------
+        // Mesh-based MDI: vertices come from the user's Mesh via the input
+        // assembler — shaders can use the standard POSITION / NORMAL /
+        // TEXCOORD0 semantics instead of pulling from a StructuredBuffer.
+        //
+        // True MDI is currently routed to the native plugin only on backends
+        // whose MDI.hlsl branch resolves the global instance ID through
+        // SV_InstanceID — that's Metal, Vulkan and WebGPU. On D3D11/D3D12
+        // and OpenGL the shader expects a TEXCOORD7 input element which the
+        // user mesh doesn't provide; for those backends we fall back to a
+        // per-draw DrawMeshInstancedIndirect loop and emit a warning.
+        // -----------------------------------------------------------------------
+
+        public static void MultiDrawMeshIndirect(
+            this CommandBuffer cmd,
+            Mesh mesh,
+            Material material,
+            MaterialPropertyBlock properties,
+            int shaderPass,
+            GraphicsBuffer bufferWithArgs,
+            int argsStartIndex,
+            int argsCount)
+        {
+            EnsureInitialized();
+
+            if (_supported && argsCount > 1 && MeshApiSupportedNatively)
+            {
+                var meshIndexBuffer = EnsureMeshIndexBuffer(mesh);
+                IntPtr dataPtr = WriteParams(
+                    bufferWithArgs, meshIndexBuffer, argsStartIndex, argsCount,
+                    mesh.GetTopology(0),
+                    EncodeIndexFormat(mesh.indexFormat),
+                    out int slot);
+
+                cmd.DrawMeshInstancedIndirect(mesh, 0, material, shaderPass,
+                    _dummyArgsBuffer, slot * INDIRECT_DRAW_INDEXED_ARGS_SIZE, properties);
+
+                cmd.IssuePluginEventAndData(_renderEventAndDataFunc, _baseEventID + slot, dataPtr);
+            }
+            else
+            {
+                if (_supported && !MeshApiSupportedNatively) WarnMeshFallbackOnce();
+                for (int i = 0; i < argsCount; i++)
+                {
+                    cmd.DrawMeshInstancedIndirect(mesh, 0, material, shaderPass,
+                        bufferWithArgs, (argsStartIndex + i) * INDIRECT_DRAW_INDEXED_ARGS_SIZE, properties);
+                }
+            }
+        }
+
+#if UNITY_6000_0_OR_NEWER
+        public static void MultiDrawMeshIndirect(
+            this RasterCommandBuffer cmd,
+            Mesh mesh,
+            Material material,
+            MaterialPropertyBlock properties,
+            int shaderPass,
+            GraphicsBuffer bufferWithArgs,
+            int argsStartIndex,
+            int argsCount)
+        {
+            EnsureInitialized();
+
+            if (_supported && argsCount > 1 && MeshApiSupportedNatively)
+            {
+                var meshIndexBuffer = EnsureMeshIndexBuffer(mesh);
+                IntPtr dataPtr = WriteParams(
+                    bufferWithArgs, meshIndexBuffer, argsStartIndex, argsCount,
+                    mesh.GetTopology(0),
+                    EncodeIndexFormat(mesh.indexFormat),
+                    out int slot);
+
+                cmd.DrawMeshInstancedIndirect(mesh, 0, material, shaderPass,
+                    _dummyArgsBuffer, slot * INDIRECT_DRAW_INDEXED_ARGS_SIZE, properties);
+
+                cmd.IssuePluginEventAndData(_renderEventAndDataFunc, _baseEventID + slot, dataPtr);
+            }
+            else
+            {
+                if (_supported && !MeshApiSupportedNatively) WarnMeshFallbackOnce();
+                for (int i = 0; i < argsCount; i++)
+                {
+                    cmd.DrawMeshInstancedIndirect(mesh, 0, material, shaderPass,
+                        bufferWithArgs, (argsStartIndex + i) * INDIRECT_DRAW_INDEXED_ARGS_SIZE, properties);
+                }
+            }
+        }
+
+        public static void MultiDrawMeshIndirect(
+            this UnsafeCommandBuffer cmd,
+            Mesh mesh,
+            Material material,
+            MaterialPropertyBlock properties,
+            int shaderPass,
+            GraphicsBuffer bufferWithArgs,
+            int argsStartIndex,
+            int argsCount)
+        {
+            EnsureInitialized();
+
+            if (_supported && argsCount > 1 && MeshApiSupportedNatively)
+            {
+                var meshIndexBuffer = EnsureMeshIndexBuffer(mesh);
+                IntPtr dataPtr = WriteParams(
+                    bufferWithArgs, meshIndexBuffer, argsStartIndex, argsCount,
+                    mesh.GetTopology(0),
+                    EncodeIndexFormat(mesh.indexFormat),
+                    out int slot);
+
+                cmd.DrawMeshInstancedIndirect(mesh, 0, material, shaderPass,
+                    _dummyArgsBuffer, slot * INDIRECT_DRAW_INDEXED_ARGS_SIZE, properties);
+
+                cmd.IssuePluginEventAndData(_renderEventAndDataFunc, _baseEventID + slot, dataPtr);
+            }
+            else
+            {
+                if (_supported && !MeshApiSupportedNatively) WarnMeshFallbackOnce();
+                for (int i = 0; i < argsCount; i++)
+                {
+                    cmd.DrawMeshInstancedIndirect(mesh, 0, material, shaderPass,
+                        bufferWithArgs, (argsStartIndex + i) * INDIRECT_DRAW_INDEXED_ARGS_SIZE, properties);
                 }
             }
         }
