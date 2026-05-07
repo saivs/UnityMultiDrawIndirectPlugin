@@ -75,9 +75,9 @@ Measured as total `PlayerLoop` time (not just command submission) in the build, 
 
 | Method | CPU Time |
 |---|---|
-| **MultiDrawIndirect** | 1.29 ms |
-| ProceduralIndirect Loop | 18.79 ms |
-| RenderPrimitivesIndexedIndirect | 15.01 ms |
+| **MultiDrawIndirect** | 1.52 ms |
+| ProceduralIndirect Loop | 23.06 ms |
+| RenderPrimitivesIndexedIndirect | 18.43 ms |
 
 ## Limitations
 
