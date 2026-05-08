@@ -18,8 +18,8 @@ Even on a fast desktop CPU with Unity's built-in batching, **1,000 draw calls ca
 
 Modern GPU-driven rendering pipelines rely on Multi-Draw Indirect to batch thousands of draw calls into a single GPU command. Unity does **not** expose MDI in any form:
 
-- `Graphics.RenderPrimitivesIndexedIndirect` is the closest built-in alternative, but it is **not** MDI — it issues individual draw calls on the CPU side and, critically, **cannot be used inside CommandBuffers**, making it unusable in scriptable render pipelines and render graph workflows.
-- `CommandBuffer.DrawProceduralIndirect` supports only a single indirect draw per call. Issuing it in a loop ("ProceduralIndirect loop") works but scales poorly — each call has full CPU overhead of state validation, command recording, and managed-to-native transitions.
+- `Graphics.RenderPrimitivesIndexedIndirect / Graphics.RenderMeshIndirect` is the closest built-in alternative, but it is **not** MDI — it issues individual draw calls on the CPU side and, critically, **cannot be used inside CommandBuffers**, making it unusable in scriptable render pipelines and render graph workflows.
+- `CommandBuffer.DrawProceduralIndirect / CommandBuffer.DrawMeshInstancedIndirect` supports only a single indirect draw per call. Issuing it in a loop ("ProceduralIndirect loop") works but scales poorly — each call has full CPU overhead of state validation, command recording, and managed-to-native transitions.
 
 This plugin solves the problem by injecting a single native MDI command directly into Unity's graphics command stream via `IssuePluginEventAndData`, providing **true hardware-level batching** with minimal CPU cost.
 
@@ -36,7 +36,7 @@ This plugin solves the problem by injecting a single native MDI command directly
 
 ## Performance
 
-CPU time comparison for **25,000 draw calls**. D3D11/D3D12/Vulkan/OpenGL ES tested on RTX 3080; Metal tested on Apple M2 Pro (Mac mini).
+CPU time comparison for **25,000 draw calls**. D3D11/D3D12/Vulkan/OpenGL ES tested on RTX 3080, AMD Ryzen 9 5950X; Metal tested on Apple M2 Pro (Mac mini).
 Measured as total `PlayerLoop` time (not just command submission) in the build, so the numbers include all engine overhead per frame:
 
 ### D3D11
@@ -84,7 +84,6 @@ Measured as total `PlayerLoop` time (not just command submission) in the build, 
 - **D3D11 + RenderDoc**: The plugin uses NvAPI, which can cause Unity to crash when RenderDoc attempts to inject at runtime. To avoid this, attach RenderDoc **at Unity startup** (launch Unity from RenderDoc) rather than connecting mid-session.
 - **D3D11 + AMD GPUs**: D3D11 does not have a native MDI API. On NVIDIA, this is solved via NvAPI, which can attach to an already-created D3D11 device. AMD has an equivalent extension in AGS (`agsDriverExtensionsDX11_MultiDrawIndexedInstancedIndirect`), but AGS requires the D3D11 device to be created through `agsDriverExtensionsDX11_CreateDevice` — since Unity creates the device itself, AGS extensions cannot be enabled retroactively. Because of this (and lack of AMD hardware for testing), MDI on D3D11 + AMD is not currently supported. AMD GPUs are fully supported under D3D12, Vulkan, and OpenGL.
 - **Consoles & mobile devices**: The plugin has only been tested on desktop Windows and macOS. It has not been verified on consoles (PlayStation, Xbox, Switch) or mobile devices — support on these platforms is not guaranteed.
-- **Unity Mesh support — partial**: A second extension method, `cmd.MultiDrawMeshIndirect`, accepts a Unity `Mesh` directly so you can write shaders with the standard `POSITION` / `NORMAL` semantics instead of fetching vertex data from a `StructuredBuffer`. True MDI through this API currently routes through the native plugin only on **Metal, Vulkan and WebGPU** — backends whose `MDI.hlsl` branch resolves the global instance ID through `SV_InstanceID`. On D3D11, D3D12 and OpenGL/GLES the user shader expects a `TEXCOORD7` element which arbitrary user meshes don't carry, so the mesh API falls back to a per-draw `DrawMeshInstancedIndirect` loop and emits a one-time warning. The original `cmd.MultiDrawIndexedIndirect` (procedural, vertex pulling from `StructuredBuffer`) remains the fully-supported path on every backend.
 - **Identity buffer instance limit (D3D11/D3D12/OpenGL/GLES)**: The per-instance identity buffer defaults to 65,536 entries. For any draw command in an MDI batch, `startInstance + instanceCount` must not exceed this value. Use `MultiDrawIndirect.MaxInstanceCount` to increase or decrease the limit at runtime. This limitation does not apply to Vulkan.
 
 ## Installation
@@ -100,59 +99,26 @@ Add the package via Unity Package Manager using a git URL:
 
 ## Usage
 
-The plugin exposes two extension methods on `CommandBuffer` (and `RasterCommandBuffer` / `UnsafeCommandBuffer` in Unity 6+): an indexed/procedural form (`MultiDrawIndexedIndirect`, supported on every backend) and a Mesh form (`MultiDrawMeshIndirect`, true MDI on Metal / Vulkan / WebGPU; loop fallback elsewhere — see Limitations).
-
-### Indexed / procedural — `cmd.MultiDrawIndexedIndirect`
-
-The shader pulls vertex data from a `StructuredBuffer` indexed by `SV_VertexID`. Works on every backend.
+The plugin exposes two extension methods on `CommandBuffer` (and `RasterCommandBuffer` / `UnsafeCommandBuffer` in Unity 6+): an indexed/procedural form (`MultiDrawIndexedIndirect`) and a Mesh form (`MultiDrawMeshIndirect`). Both run as true single-call MDI on every supported backend.
 
 ```csharp
 using Saivs.Graphics.Core.MDI;
+```
 
+### Identity Buffer
+```csharp
 // Increase the limit to 1,000,000 instances (D3D11/D3D12/OpenGL)
 // Read the Deep Dive section "Per-Instance Identity Buffer"
 MultiDrawIndirect.MaxInstanceCount = 1_000_000;
-
-cmd.MultiDrawIndexedIndirect(
-    indexBuffer:    indexBuffer,
-    material:       material,
-    properties:     propertyBlock,
-    shaderPass:     0,
-    topology:       MeshTopology.Triangles,
-    bufferWithArgs: argsBuffer,
-    argsStartIndex: 0,
-    argsCount:      drawCount
-);
-```
-
-That's it — one call replaces the entire draw loop. When the native plugin is available, all draws are batched into a single MDI command. Otherwise, it falls back to a `DrawProceduralIndirect` loop automatically.
-
-Matching vertex shader — vertex data fetched manually from a `StructuredBuffer` via `SV_VertexID`:
-
-```hlsl
-HLSLPROGRAM
-#pragma vertex vert
-#pragma fragment frag
-
-#include "Packages/com.saivs.multi-draw-indirect/Runtime/ShaderLibrary/MDI.hlsl"
-
-VertexOutput vert(uint vertexID : SV_VertexID, MDI_INSTANCE_ID_PARAMETER)
-{
-    uint globalInstanceID = MDI_INSTANCE_ID;
-
-    // Use globalInstanceID to fetch per-instance data (positions, transforms, etc.)
-    return BuildOutput(vertexID, globalInstanceID);
-}
-ENDHLSL
+// Query the current limit
+uint current = MultiDrawIndirect.MaxInstanceCount;
 ```
 
 ### Mesh — `cmd.MultiDrawMeshIndirect`
 
-Pass a Unity `Mesh` directly. Vertices come through the standard input assembler so the shader can use the regular `POSITION` / `NORMAL` / `TEXCOORD0` semantics instead of `SV_VertexID` + `StructuredBuffer`.
+Pass a Unity `Mesh` directly. Vertices come through the standard input assembler so the shader can use the regular `POSITION` / `NORMAL` / `TEXCOORD0` / etc.
 
 ```csharp
-using Saivs.Graphics.Core.MDI;
-
 cmd.MultiDrawMeshIndirect(
     mesh:           mesh,
     material:       material,
@@ -163,8 +129,9 @@ cmd.MultiDrawMeshIndirect(
     argsCount:      drawCount
 );
 ```
+That's it — one call replaces the entire draw loop. When the native plugin is available, all draws are batched into a single MDI command. 
 
-The `argsBuffer` layout is identical to `MultiDrawIndexedIndirect` (`GraphicsBuffer.IndirectDrawIndexedArgs`). Each entry's `startIndex` / `baseVertexIndex` directly drives which slice of the mesh's index/vertex buffer is read for that draw — letting you scatter different shapes across the batch by combining several meshes into one and indexing them through args. Multi-submesh meshes aren't addressed via a `submeshIndex` parameter; encode whatever slice you need directly through `startIndex` / `baseVertexIndex` / `indexCountPerInstance`.
+The `argsBuffer` layout is identical to `MultiDrawIndexedIndirect` ([GraphicsBuffer.IndirectDrawIndexedArgs](https://docs.unity3d.com/6000.4/Documentation/ScriptReference/GraphicsBuffer.IndirectDrawIndexedArgs.html)). Each entry's `startIndex` / `baseVertexIndex` directly drives which slice of the mesh's index/vertex buffer is read for that draw — letting you scatter different shapes across the batch by combining several meshes into one and indexing them through args. Multi-submesh meshes aren't addressed via a `submeshIndex` parameter; encode whatever slice you need directly through `startIndex` / `baseVertexIndex` / `indexCountPerInstance`.
 
 Matching vertex shader — vertex data arrives through the standard semantics:
 
@@ -189,7 +156,43 @@ VertexOutput vert(Attributes input, MDI_INSTANCE_ID_PARAMETER)
 ENDHLSL
 ```
 
-**Backend support.** True MDI through this API currently runs on Metal, Vulkan and WebGPU — backends whose `MDI.hlsl` branch resolves `MDI_INSTANCE_ID` through `SV_InstanceID` and therefore don't require a `TEXCOORD7` input element on the user's mesh. On D3D11, D3D12 and OpenGL/GLES the call falls back to a per-draw `DrawMeshInstancedIndirect` loop with a one-time warning. The mesh's `indexBufferTarget` is augmented with `Raw` automatically the first time it's seen, so `mesh.GetIndexBuffer()` returns a buffer the native plugin can address.
+### Indexed / procedural — `cmd.MultiDrawIndexedIndirect`
+
+The shader pulls vertex data from a `StructuredBuffer` indexed by `SV_VertexID`.
+
+```csharp
+
+cmd.MultiDrawIndexedIndirect(
+    indexBuffer:    indexBuffer,
+    material:       material,
+    properties:     propertyBlock,
+    shaderPass:     0,
+    topology:       MeshTopology.Triangles,
+    bufferWithArgs: argsBuffer,
+    argsStartIndex: 0,
+    argsCount:      drawCount
+);
+```
+
+Matching vertex shader — vertex data fetched manually from a `StructuredBuffer` via `SV_VertexID`:
+
+```hlsl
+HLSLPROGRAM
+#pragma vertex vert
+#pragma fragment frag
+
+#include "Packages/com.saivs.multi-draw-indirect/Runtime/ShaderLibrary/MDI.hlsl"
+
+VertexOutput vert(uint vertexID : SV_VertexID, MDI_INSTANCE_ID_PARAMETER)
+{
+    uint globalInstanceID = MDI_INSTANCE_ID;
+
+    // Use globalInstanceID and vertexID to fetch per-instance data (positions, transforms, etc.)
+}
+ENDHLSL
+```
+
+**Backend support.** True single-call MDI through this API runs on every supported backend (D3D11, D3D12, Vulkan, Metal, WebGPU, OpenGL Core, OpenGL ES). On Metal, Vulkan and WebGPU the user mesh doesn't need a `TEXCOORD7` element — `MDI.hlsl` resolves `MDI_INSTANCE_ID` through `SV_InstanceID`. On D3D11 and D3D12 the native plugin reflects the user shader's vertex bytecode and patches the input layout / PSO at creation time to add a per-instance `TEXCOORD7 → identity buffer` element on slot 15, leaving the user mesh's vertex buffers untouched. On OpenGL / OpenGL ES the plugin clones Unity's mesh VAO into its own VAO and adds the same per-instance `TEXCOORD7` binding, with a small fingerprint-keyed cache so repeated draws of the same mesh skip the cloning. The mesh's `indexBufferTarget` is augmented with `Raw` automatically the first time it's seen, so `mesh.GetIndexBuffer()` returns a buffer the native plugin can address.
 
 ### `MDI.hlsl` macros
 
@@ -237,14 +240,6 @@ The approach used by this plugin (inspired by the article above) is to create a 
 
 The identity buffer defaults to **65,536 elements**. This means `startInstance + instanceCount` for any single draw command must not exceed this value. The buffer size can be changed at runtime via the `MaxInstanceCount` property:
 
-```csharp
-// Increase the limit to 1,000,000 instances (D3D11/D3D12/OpenGL)
-MultiDrawIndirect.MaxInstanceCount = 1_000_000;
-
-// Query the current limit
-uint current = MultiDrawIndirect.MaxInstanceCount;
-```
-
 This limit applies only to APIs that use the identity buffer (D3D11, D3D12, OpenGL Core, OpenGL ES). On Vulkan and Metal `MaxInstanceCount` returns 0 and has no effect — Vulkan's `gl_InstanceIndex` already includes `startInstance`, and Metal's backend uses a different mechanism (see the Metal section below).
 
 ### The Unity Problem: No Access to Input Layouts
@@ -253,21 +248,25 @@ In a typical D3D11/D3D12 application, adding a per-instance vertex buffer is str
 
 ### The Workaround: Input Layout Hooking
 
-This plugin solves the problem by **intercepting** `ID3D11Device::CreateInputLayout()` (and the equivalent D3D12 PSO creation) at the native level using an inline function hook. When Unity creates an input layout, the hook checks whether it contains a `TEXCOORD7` semantic. If it does, the hook patches that element to:
+This plugin solves the problem by **intercepting** `ID3D11Device::CreateInputLayout()` (and the equivalent D3D12 PSO creation entry points: `CreateGraphicsPipelineState`, the stream-based `CreatePipelineState`, and `ID3D12PipelineLibrary::LoadGraphicsPipeline`) at the native level using inline function hooks. When Unity creates an input layout / PSO, the hook handles three cases:
 
-- Read from **vertex buffer slot 15** (an otherwise unused slot)
-- Use `D3D11_INPUT_PER_INSTANCE_DATA` with `InstanceDataStepRate = 1`
-- Format `R32_UINT`
+1. **IL already declares `TEXCOORD7`** (indexed path's prime mesh) — patch that element to read from vertex buffer slot 15, classification `PER_INSTANCE_DATA`, step rate 1, format `R32_UINT`.
+2. **IL has no `TEXCOORD7` but the VS does** (mesh path with a user-supplied mesh) — reflect the VS bytecode (passed into `CreateInputLayout` directly, or pulled from the PSO desc / stream subobject) using `D3DReflect` from `d3dcompiler_47.dll`. If the input signature contains `TEXCOORD7`, append a new per-instance element on slot 15 with the same parameters as case 1. This is what makes `MultiDrawMeshIndirect` work with arbitrary user meshes without forcing them to carry a `TEXCOORD7` channel.
+3. Otherwise — pass through unchanged (skybox, post-processing, depth-only, etc.).
 
 At draw time, the plugin binds the identity buffer to slot 15. The Input Assembler then automatically loads the correct global index for each instance.
 
-**Triggering PSO recreation:** Unity creates Pipeline State Objects before the native plugin is loaded, so the hook is not active during initial PSO creation. To force Unity to recreate the PSO (and trigger the hook), the plugin uses `VertexAttributeDescriptor` on the C# side to declare a mesh layout that includes `TEXCOORD7`. This causes Unity to create a new input layout that passes through the hook.
+**Triggering PSO recreation (indexed path):** Unity creates Pipeline State Objects before the native plugin is loaded, so the hook is not active during initial PSO creation. For the indexed (procedural) path the plugin uses `VertexAttributeDescriptor` on the C# side to declare a tiny prime-mesh whose layout includes `TEXCOORD7`. This causes Unity to create a new input layout / PSO that passes through the hook (case 1 above). The mesh path doesn't need this trick — Unity creates a PSO for the user mesh on its first draw, and the hook fires through case 2.
 
 ### OpenGL / OpenGL ES
 
 On OpenGL, `gl_InstanceID` also does **not** include `baseInstance` — this is a common misconception, as Vulkan's `gl_InstanceIndex` does. The solution is the same identity buffer approach, but the implementation is simpler than D3D11/D3D12: OpenGL's vertex attribute state is dynamic, so no PSO hooking is needed.
 
-Before each MDI call, the plugin creates a dedicated VAO (Vertex Array Object), queries the active shader program for the `TEXCOORD7` attribute location via `glGetAttribLocation`, and binds the identity buffer to that location using `glVertexAttribIPointer` with `glVertexAttribDivisor(location, 1)`. The attribute location and VAO are cached across frames for performance, with the VAO validated via `glIsVertexArray` to handle Unity's implicit GL context resets (e.g. window maximize/detach). After the MDI draw, the plugin restores Unity's original VAO.
+**Indexed (procedural) path.** The shader pulls vertex data via `SV_VertexID`, so a minimal VAO is enough. The plugin owns a dedicated `_mdiVAO`, binds the caller's index buffer and the identity buffer (to the `TEXCOORD7` attribute location resolved via `glGetAttribLocation` and bound with `glVertexAttribIPointer` + `glVertexAttribDivisor(location, 1)`), draws, and restores Unity's previous VAO. The attribute location and VAO are cached across frames; the VAO is validated via `glIsVertexArray` before reuse to handle Unity's implicit GL context resets (e.g. window maximize/detach).
+
+**Mesh path.** Modifying `TEXCOORD7` directly on Unity's mesh VAO is unsafe — it's recorded VAO state, persists across draws, and falls out of sync with Unity's state cache, breaking subsequent rendering of the same mesh. Instead, the plugin **clones** Unity's VAO into its own VAO on first use: it snapshots every enabled vertex attribute slot (size, stride, type, normalized, integer flag, divisor, buffer binding, pointer) and the `GL_ELEMENT_ARRAY_BUFFER` binding, replays them onto a clone VAO, and adds the per-instance `TEXCOORD7 → identity buffer` binding only on the clone. Unity's original VAO is left untouched.
+
+Cloning is expensive (~80–130 GL calls per draw), so the plugin keeps a small fingerprint-keyed LRU cache of clones (4 entries by default). The fingerprint covers `(unityVAO ID, GL_CURRENT_PROGRAM, slot 0 buffer/stride/pointer, ELEMENT_ARRAY_BUFFER, identity buffer ID)` — enough to detect mesh re-uploads, shader switches, mesh recreation, and identity buffer resizes. On a cache hit the hot path is just the fingerprint queries plus a single `glBindVertexArray`. The cache is also explicitly invalidated when `MaxInstanceCount` is changed at runtime (since cached clones reference the old identity buffer).
 
 ### Metal: Why "It's Impossible" Was Wrong
 
