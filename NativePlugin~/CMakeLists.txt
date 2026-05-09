@@ -81,6 +81,22 @@ if (WIN32)
     target_link_libraries(GfxPluginMDI PRIVATE d3d11 d3d12 dxgi)
 endif()
 
+if (ANDROID)
+    # Unity loads Android native plugins as libGfxPluginMDI.so per ABI.
+    # Vulkan/GLES backends are header-only — symbols are resolved at runtime via
+    # vkGetDeviceProcAddr / eglGetProcAddress, so we don't link Vulkan/GLES libs here.
+    # libc++_shared is explicit because clang++.exe on a path with spaces resolves
+    # to a DOS 8.3 short name (`CLANG_~1.EXE`) that drops the `++`, making the driver
+    # act as the C variant and skip auto-linking the C++ STL. Unity ships
+    # libc++_shared.so in every Android build, so this adds no APK overhead.
+    target_link_libraries(GfxPluginMDI PRIVATE log android c++_shared)
+    # Hide non-exported symbols and strip — keeps the .so small.
+    target_compile_options(GfxPluginMDI PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden)
+    set_target_properties(GfxPluginMDI PROPERTIES
+        LINK_FLAGS "-Wl,--build-id=none -Wl,--gc-sections -Wl,--strip-all"
+    )
+endif()
+
 # Output to package Plugins folder
 get_filename_component(PLUGINS_ROOT "${CMAKE_SOURCE_DIR}/../Plugins" ABSOLUTE)
 
@@ -93,6 +109,15 @@ if (APPLE)
             "$<TARGET_BUNDLE_DIR:GfxPluginMDI>"
             "${PLUGINS_DIR}/GfxPluginMDI.bundle"
         COMMENT "Copying GfxPluginMDI.bundle to package Plugins/macOS folder"
+    )
+elseif (ANDROID)
+    set(PLUGINS_DIR "${PLUGINS_ROOT}/Android/${ANDROID_ABI}")
+    add_custom_command(TARGET GfxPluginMDI POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${PLUGINS_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:GfxPluginMDI>"
+            "${PLUGINS_DIR}/"
+        COMMENT "Copying libGfxPluginMDI.so to package Plugins/Android/${ANDROID_ABI} folder"
     )
 else()
     set(PLUGINS_DIR "${PLUGINS_ROOT}/x86_64")
