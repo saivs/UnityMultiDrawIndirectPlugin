@@ -66,43 +66,165 @@ static void EnsureD3DCompilerLoaded()
     DebugLog("[MDI] D3D11 D3DReflect: %s\n", g_D3DReflect ? "loaded" : "NOT loaded (mesh-path augmentation disabled)");
 }
 
+// Parses the DXBC binary directly to find a TEXCOORD7 entry in the input
+// signature (ISGN / ISG1 chunk). Necessary because Unity often passes a
+// signature-only blob (from D3DGetInputSignatureBlob) to CreateInputLayout,
+// and D3DReflect rejects those with E_INVALIDARG — it needs the full SHEX
+// chunk. Reads the chunk table, locates ISGN/ISG1, walks fixed-size element
+// records, and looks up each semantic name in the chunk's name pool.
+static bool ParseDxbcInputSignature_HasTexcoord7(const void* bytecode, SIZE_T size)
+{
+    if (!bytecode || size < 32) return false;
+    auto* data = static_cast<const uint8_t*>(bytecode);
+    if (data[0] != 'D' || data[1] != 'X' || data[2] != 'B' || data[3] != 'C')
+        return false;
+
+    // DXBC header: magic(4) + md5(16) + version(4) + totalSize(4) + chunkCount(4)
+    uint32_t totalSize  = *reinterpret_cast<const uint32_t*>(data + 24);
+    uint32_t chunkCount = *reinterpret_cast<const uint32_t*>(data + 28);
+    if (totalSize > size || chunkCount == 0 || chunkCount > 64) return false;
+    if (32u + chunkCount * 4u > size) return false;
+
+    auto* chunkOffsets = reinterpret_cast<const uint32_t*>(data + 32);
+
+    // ISGN = 'N','G','S','I' little-endian; ISG1 = '1','G','S','I'
+    constexpr uint32_t kISGN = 0x4E475349u;
+    constexpr uint32_t kISG1 = 0x31475349u;
+
+    for (uint32_t i = 0; i < chunkCount; ++i)
+    {
+        uint32_t off = chunkOffsets[i];
+        if (off + 8 > size) continue;
+
+        uint32_t fourCC    = *reinterpret_cast<const uint32_t*>(data + off);
+        uint32_t chunkSize = *reinterpret_cast<const uint32_t*>(data + off + 4);
+        if (off + 8 + chunkSize > size) continue;
+        if (fourCC != kISGN && fourCC != kISG1) continue;
+
+        auto* chunkData = data + off + 8;
+        if (chunkSize < 8) continue;
+
+        uint32_t numElements = *reinterpret_cast<const uint32_t*>(chunkData);
+        if (numElements == 0 || numElements > 64) continue;
+
+        // Element table starts after 8-byte chunk header (numElements + reserved).
+        // ISGN element = 24 bytes; ISG1 adds MinPrecision = 28 bytes.
+        size_t elemSize = (fourCC == kISG1) ? 28u : 24u;
+        const uint8_t* elements = chunkData + 8;
+        if (8u + numElements * elemSize > chunkSize) continue;
+
+        for (uint32_t j = 0; j < numElements; ++j)
+        {
+            const uint8_t* elem = elements + j * elemSize;
+            uint32_t nameOff       = *reinterpret_cast<const uint32_t*>(elem + 0);
+            uint32_t semanticIndex = *reinterpret_cast<const uint32_t*>(elem + 4);
+            // sysVal=elem+8, compType=elem+12, reg=elem+16, mask=elem[20], rwMask=elem[21]
+
+            if (nameOff >= chunkSize) continue;
+            const char* name = reinterpret_cast<const char*>(chunkData) + nameOff;
+            // Bound the name by the chunk extent to avoid OOB string compare.
+            size_t maxNameLen = chunkSize - nameOff;
+            if (maxNameLen < 9) continue; // "TEXCOORD\0"
+            if (strncmp(name, "TEXCOORD", 9) == 0 && semanticIndex == 7)
+                return true;
+        }
+        // Found the signature chunk — no need to keep searching.
+        break;
+    }
+    return false;
+}
+
+// Detects the MDI_INSTANCE_ID_PARAMETER marker: a TEXCOORD7 input. Verbose
+// logging for the first few invocations so we can verify whether FXC strips
+// the input, what ComponentType it reports, and whether Unity passes a full
+// VS bytecode or a signature-only blob to CreateInputLayout.
 static bool VSInputHasTexcoord7(const void* bytecode, SIZE_T size)
 {
+    static uint32_t s_invokeCount = 0;
+    uint32_t myInvoke = ++s_invokeCount;
+    bool verbose = (myInvoke <= 8);
+
     EnsureD3DCompilerLoaded();
     if (!g_D3DReflect || !bytecode || size == 0)
+    {
+        if (verbose)
+            DebugLog("[MDI] D3D11 VSInputHasTexcoord7 #%u: early-out reflect=%p ptr=%p size=%zu\n",
+                     myInvoke, g_D3DReflect, bytecode, size);
         return false;
+    }
 
     ID3D11ShaderReflection* refl = nullptr;
     HRESULT hr = g_D3DReflect(bytecode, size, kIID_ID3D11ShaderReflection_v47,
                               reinterpret_cast<void**>(&refl));
     if (FAILED(hr) || !refl)
-        return false;
+    {
+        // D3DReflect needs the full DXBC with SHEX chunk; Unity often passes
+        // a signature-only blob (D3DGetInputSignatureBlob) here. Parse the
+        // ISGN chunk directly as a fallback.
+        bool found = ParseDxbcInputSignature_HasTexcoord7(bytecode, size);
+        if (verbose)
+            DebugLog("[MDI] D3D11 VSInputHasTexcoord7 #%u: D3DReflect hr=0x%08X size=%zu, sigblob-parser found=%d\n",
+                     myInvoke, hr, size, found ? 1 : 0);
+        return found;
+    }
 
     D3D11_SHADER_DESC desc = {};
     refl->GetDesc(&desc);
 
+    if (verbose)
+        DebugLog("[MDI] D3D11 VSInputHasTexcoord7 #%u: size=%zu, InputParameters=%u\n",
+                 myInvoke, size, desc.InputParameters);
+
     bool found = false;
+    bool sawAnyTexcoord7 = false;
     for (UINT i = 0; i < desc.InputParameters; ++i)
     {
         D3D11_SIGNATURE_PARAMETER_DESC p = {};
         if (FAILED(refl->GetInputParameterDesc(i, &p))) continue;
-        if (p.SemanticName && strcmp(p.SemanticName, "TEXCOORD") == 0 && p.SemanticIndex == 7)
-        {
-            found = true;
-            break;
-        }
+        if (verbose)
+            DebugLog("[MDI]   input[%u] %s%u CompType=%d Mask=0x%X RWMask=0x%X\n",
+                     i, p.SemanticName ? p.SemanticName : "?", p.SemanticIndex,
+                     p.ComponentType, p.Mask, p.ReadWriteMask);
+        if (!p.SemanticName || strcmp(p.SemanticName, "TEXCOORD") != 0 || p.SemanticIndex != 7)
+            continue;
+        sawAnyTexcoord7 = true;
+        // Accept any TEXCOORD7 in the VS input signature — FXC for D3D11
+        // doesn't reliably report uint inputs as ComponentType=UINT32.
+        // The strict UINT32 filter is kept for D3D12 (DXC) only.
+        found = true;
+        break;
     }
+
+    if (verbose && !sawAnyTexcoord7)
+        DebugLog("[MDI] D3D11 VSInputHasTexcoord7 #%u: no TEXCOORD7 in input signature\n", myInvoke);
 
     refl->Release();
     return found;
 }
 
+// Any TEXCOORD7 in the IL — regardless of format. If present, we REPLACE
+// that element (a duplicate semantic would make CreateInputLayout fail).
 static bool HasTexcoord7_D3D11(const D3D11_INPUT_ELEMENT_DESC* elements, UINT count)
 {
     for (UINT i = 0; i < count; ++i)
     {
         if (elements[i].SemanticIndex == 7 &&
             elements[i].SemanticName && strcmp(elements[i].SemanticName, "TEXCOORD") == 0)
+            return true;
+    }
+    return false;
+}
+
+// TEXCOORD7 already in IL as R32_UINT — strongest possible MDI marker because
+// no Unity shader declares TEXCOORD7 with this format. This is the signature
+// our C# prime mesh produces (VertexAttributeFormat.UInt32, 1 component).
+static bool HasR32UintTexcoord7_D3D11(const D3D11_INPUT_ELEMENT_DESC* elements, UINT count)
+{
+    for (UINT i = 0; i < count; ++i)
+    {
+        if (elements[i].SemanticIndex == 7 &&
+            elements[i].SemanticName && strcmp(elements[i].SemanticName, "TEXCOORD") == 0 &&
+            elements[i].Format == DXGI_FORMAT_R32_UINT)
             return true;
     }
     return false;
@@ -117,7 +239,8 @@ static bool IsTexcoord7Correct_D3D11(const D3D11_INPUT_ELEMENT_DESC* elements, U
         {
             return elements[i].InputSlot == kInstanceVBSlot_D3D11 &&
                    elements[i].InputSlotClass == D3D11_INPUT_PER_INSTANCE_DATA &&
-                   elements[i].InstanceDataStepRate == 1;
+                   elements[i].InstanceDataStepRate == 1 &&
+                   elements[i].Format == DXGI_FORMAT_R32_UINT;
         }
     }
     return false;
@@ -139,19 +262,41 @@ static HRESULT STDMETHODCALLTYPE Hook_CreateInputLayout(
         return callOrig(self, pInputElementDescs, NumElements,
                         pShaderBytecodeWithInputSignature, BytecodeLength, ppInputLayout);
 
-    // Case 1: IL already declares TEXCOORD7 (indexed prime-mesh path).
-    // Patch its slot/format/classification to per-instance on slot 15.
-    if (HasTexcoord7_D3D11(pInputElementDescs, NumElements))
-    {
-        if (IsTexcoord7Correct_D3D11(pInputElementDescs, NumElements))
-        {
-            g_ilSkippedCount++;
-            return callOrig(self, pInputElementDescs, NumElements,
-                            pShaderBytecodeWithInputSignature, BytecodeLength, ppInputLayout);
-        }
+    // Two independent MDI markers:
+    //   1. IL contains R32_UINT TEXCOORD7 — only our C# prime mesh produces this.
+    //      Reliable signal regardless of how FXC reports the VS input type.
+    //   2. VS bytecode declares a uint scalar TEXCOORD7 (MDI_INSTANCE_ID_PARAMETER).
+    //      Necessary for the mesh path where the user's mesh has no TEXCOORD7.
+    // Either one is sufficient to treat this IL as MDI.
+    bool ilR32UintTexcoord7 = HasR32UintTexcoord7_D3D11(pInputElementDescs, NumElements);
+    bool vsHasMdiMarker     = VSInputHasTexcoord7(pShaderBytecodeWithInputSignature, BytecodeLength);
 
-        std::vector<D3D11_INPUT_ELEMENT_DESC> patched(pInputElementDescs, pInputElementDescs + NumElements);
-        for (auto& e : patched)
+    if (g_ilCallCount <= 8)
+        DebugLog("[MDI] D3D11 IL call #%u: elems=%u, primeMeshIL=%d, vsMarker=%d\n",
+                 g_ilCallCount, NumElements, ilR32UintTexcoord7 ? 1 : 0, vsHasMdiMarker ? 1 : 0);
+
+    if (!ilR32UintTexcoord7 && !vsHasMdiMarker)
+    {
+        g_ilSkippedCount++;
+        return callOrig(self, pInputElementDescs, NumElements,
+                        pShaderBytecodeWithInputSignature, BytecodeLength, ppInputLayout);
+    }
+
+    if (IsTexcoord7Correct_D3D11(pInputElementDescs, NumElements))
+    {
+        g_ilSkippedCount++;
+        return callOrig(self, pInputElementDescs, NumElements,
+                        pShaderBytecodeWithInputSignature, BytecodeLength, ppInputLayout);
+    }
+
+    bool ilHasTexcoord7 = HasTexcoord7_D3D11(pInputElementDescs, NumElements);
+    std::vector<D3D11_INPUT_ELEMENT_DESC> result(pInputElementDescs, pInputElementDescs + NumElements);
+
+    if (ilHasTexcoord7)
+    {
+        // Replace the existing TEXCOORD7 — user mesh may carry it as a different
+        // format (e.g. float UV2). Appending a duplicate would fail validation.
+        for (auto& e : result)
         {
             if (e.SemanticIndex == 7 && e.SemanticName && strcmp(e.SemanticName, "TEXCOORD") == 0)
             {
@@ -162,26 +307,9 @@ static HRESULT STDMETHODCALLTYPE Hook_CreateInputLayout(
                 e.InstanceDataStepRate = 1;
             }
         }
-
-        HRESULT hr = callOrig(self, patched.data(), static_cast<UINT>(patched.size()),
-                              pShaderBytecodeWithInputSignature, BytecodeLength, ppInputLayout);
-
-        g_ilInjectedCount++;
-        if (g_ilInjectedCount <= 5)
-            DebugLog("[MDI] D3D11 InputLayout hook: patched TEXCOORD7 to per-instance (slot %u), "
-                     "elements=%u, hr=0x%08X\n",
-                     kInstanceVBSlot_D3D11, NumElements, hr);
-        return hr;
     }
-
-    // Case 2: IL has no TEXCOORD7. If the VS expects TEXCOORD7
-    // (user shader uses MDI_INSTANCE_ID_PARAMETER over a user-supplied mesh),
-    // CreateInputLayout would otherwise fail validation. Reflect the bytecode;
-    // if VS declares TEXCOORD7, append a per-instance element on slot 15.
-    if (VSInputHasTexcoord7(pShaderBytecodeWithInputSignature, BytecodeLength))
+    else
     {
-        std::vector<D3D11_INPUT_ELEMENT_DESC> augmented(pInputElementDescs, pInputElementDescs + NumElements);
-
         D3D11_INPUT_ELEMENT_DESC tex7 = {};
         tex7.SemanticName         = "TEXCOORD";
         tex7.SemanticIndex        = 7;
@@ -190,23 +318,19 @@ static HRESULT STDMETHODCALLTYPE Hook_CreateInputLayout(
         tex7.AlignedByteOffset    = 0;
         tex7.InputSlotClass       = D3D11_INPUT_PER_INSTANCE_DATA;
         tex7.InstanceDataStepRate = 1;
-        augmented.push_back(tex7);
-
-        HRESULT hr = callOrig(self, augmented.data(), static_cast<UINT>(augmented.size()),
-                              pShaderBytecodeWithInputSignature, BytecodeLength, ppInputLayout);
-
-        g_ilAddedCount++;
-        if (g_ilAddedCount <= 5)
-            DebugLog("[MDI] D3D11 InputLayout hook: ADDED per-instance TEXCOORD7 on slot %u "
-                     "for user mesh (elements %u -> %u), hr=0x%08X\n",
-                     kInstanceVBSlot_D3D11, NumElements, (UINT)augmented.size(), hr);
-        return hr;
+        result.push_back(tex7);
     }
 
-    // Case 3: VS doesn't declare TEXCOORD7 — pass through.
-    g_ilSkippedCount++;
-    return callOrig(self, pInputElementDescs, NumElements,
-                    pShaderBytecodeWithInputSignature, BytecodeLength, ppInputLayout);
+    HRESULT hr = callOrig(self, result.data(), static_cast<UINT>(result.size()),
+                          pShaderBytecodeWithInputSignature, BytecodeLength, ppInputLayout);
+
+    if (ilHasTexcoord7) g_ilInjectedCount++; else g_ilAddedCount++;
+    if ((g_ilInjectedCount + g_ilAddedCount) <= 8)
+        DebugLog("[MDI] D3D11 InputLayout hook: %s per-instance TEXCOORD7 on slot %u, "
+                 "elements %u -> %u, hr=0x%08X\n",
+                 ilHasTexcoord7 ? "REPLACED" : "ADDED",
+                 kInstanceVBSlot_D3D11, NumElements, (UINT)result.size(), hr);
+    return hr;
 }
 
 // -----------------------------------------------------------------------
@@ -308,6 +432,13 @@ bool MDIBackend_D3D11::Initialize(IUnityInterfaces* unityInterfaces)
     _nvApiReady = false;
     _nvApiAttempted = false;
 
+    // InputLayout hook must be installed early — Unity compiles many input
+    // layouts (including those for user meshes with our MDI shader) at scene
+    // load, BEFORE the first C# MDI draw call. A lazy install would miss
+    // those, and any IL whose VS expects TEXCOORD7 but lacks it would fail
+    // validation. Safety comes from the strict UINT32 / R32_UINT match in
+    // VSInputHasTexcoord7 / HasTexcoord7_D3D11 — only our own
+    // MDI_INSTANCE_ID_PARAMETER shaders are affected.
     InstallDeviceHook();
     CreateInstanceIDBuffer();
 
@@ -409,6 +540,27 @@ void MDIBackend_D3D11::ExecuteMDI(const MDIParams& params)
     auto* argsBuffer = static_cast<ID3D11Buffer*>(params.argsBuffer);
     constexpr uint32_t stride = 20;
 
+    // -------------------------------------------------------------------
+    // Save IA state we're about to clobber. Unity tracks its own bound
+    // state on D3D11; if we change IB / VB slot 15 / topology and don't
+    // restore, Unity's shadow-state cache stays stale and subsequent draws
+    // (notably Editor IMGUI, rendered later on the same immediate context)
+    // inherit our state and misrender.
+    // -------------------------------------------------------------------
+    ID3D11Buffer*            savedIB        = nullptr;
+    DXGI_FORMAT              savedIBFormat  = DXGI_FORMAT_UNKNOWN;
+    UINT                     savedIBOffset  = 0;
+    ID3D11Buffer*            savedVB15      = nullptr;
+    UINT                     savedVB15Stride = 0;
+    UINT                     savedVB15Offset = 0;
+    D3D11_PRIMITIVE_TOPOLOGY savedTopology  = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+
+    if (params.indexBuffer)
+        _context->IAGetIndexBuffer(&savedIB, &savedIBFormat, &savedIBOffset);
+    if (_instanceIDBuffer)
+        _context->IAGetVertexBuffers(kInstanceVBSlot, 1, &savedVB15, &savedVB15Stride, &savedVB15Offset);
+    _context->IAGetPrimitiveTopology(&savedTopology);
+
     // Rebind caller's index buffer (prime DrawMesh sets its own 3-index IB)
     if (params.indexBuffer)
     {
@@ -476,6 +628,22 @@ void MDIBackend_D3D11::ExecuteMDI(const MDIParams& params)
 
     if (_annotation)
         _annotation->EndEvent();
+
+    // -------------------------------------------------------------------
+    // Restore IA state. IAGetVertexBuffers / IAGetIndexBuffer return
+    // AddRef'd interface pointers — must Release after re-setting.
+    // -------------------------------------------------------------------
+    if (params.indexBuffer)
+    {
+        _context->IASetIndexBuffer(savedIB, savedIBFormat, savedIBOffset);
+        if (savedIB) savedIB->Release();
+    }
+    if (_instanceIDBuffer)
+    {
+        _context->IASetVertexBuffers(kInstanceVBSlot, 1, &savedVB15, &savedVB15Stride, &savedVB15Offset);
+        if (savedVB15) savedVB15->Release();
+    }
+    _context->IASetPrimitiveTopology(savedTopology);
 
     static uint32_t s_callCount = 0;
     s_callCount++;

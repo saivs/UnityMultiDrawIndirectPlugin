@@ -59,6 +59,23 @@ namespace Saivs.Graphics.Core.MDI
         [DllImport(DLL_NAME)] private static extern void MDI_SetDummyArgsBuffer(IntPtr nativePtr);
         [DllImport(DLL_NAME)] private static extern void MDI_SetParamsRing(IntPtr basePtr);
         [DllImport(DLL_NAME)] private static extern void MDI_SetDrawIndexBuffer(IntPtr nativePtr);
+        [DllImport(DLL_NAME)] private static extern void MDI_SetLogCallback(IntPtr callback);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate void NativeLogDelegate(IntPtr utf8Msg);
+
+        // Holding a managed reference prevents the delegate from being GC'd
+        // while native code still holds its function pointer.
+        private static NativeLogDelegate _logDelegate;
+
+        [AOT.MonoPInvokeCallback(typeof(NativeLogDelegate))]
+        private static void OnNativeLog(IntPtr utf8Msg)
+        {
+            if (utf8Msg == IntPtr.Zero) return;
+            string msg = Marshal.PtrToStringAnsi(utf8Msg);
+            if (!string.IsNullOrEmpty(msg))
+                Debug.Log(msg.TrimEnd('\n', '\r'));
+        }
 
         private static IntPtr _renderEventAndDataFunc;
         private static bool _initialized;
@@ -133,6 +150,16 @@ namespace Saivs.Graphics.Core.MDI
 
             try
             {
+                // Route native plugin logs into Unity console BEFORE anything
+                // else — otherwise the backend's init/hook diagnostics go to
+                // OutputDebugString and are invisible without DebugView.
+                try
+                {
+                    _logDelegate = OnNativeLog;
+                    MDI_SetLogCallback(Marshal.GetFunctionPointerForDelegate(_logDelegate));
+                }
+                catch (EntryPointNotFoundException) { /* older native plugin — ignore */ }
+
                 _supported = MDI_IsSupported() != 0;
 
                 InitIndexedState();

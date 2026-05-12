@@ -55,6 +55,12 @@ static void EnsureD3DCompilerLoaded()
              g_D3DReflect ? "loaded" : "NOT loaded (mesh-path augmentation disabled)");
 }
 
+// Detects the MDI_INSTANCE_ID_PARAMETER marker: a TEXCOORD7 input declared as
+// a single uint scalar (`nointerpolation uint id : TEXCOORD7`). This is the
+// strongest signal we can pull from the bytecode without modifying it — the
+// combination "TEXCOORD7 + ComponentType=UINT32 + only x-component read" is
+// essentially unique to our macro. Standard Unity shaders that happen to use
+// TEXCOORD7 use it for UV-like FLOAT32 data (Mask >= 3), so they won't match.
 static bool VSInputHasTexcoord7(const void* bytecode, SIZE_T size)
 {
     EnsureD3DCompilerLoaded();
@@ -80,11 +86,19 @@ static bool VSInputHasTexcoord7(const void* bytecode, SIZE_T size)
     {
         D3D11_SIGNATURE_PARAMETER_DESC p = {};
         if (FAILED(refl->GetInputParameterDesc(i, &p))) continue;
-        if (p.SemanticName && strcmp(p.SemanticName, "TEXCOORD") == 0 && p.SemanticIndex == 7)
-        {
-            found = true;
-            break;
-        }
+        if (!p.SemanticName || strcmp(p.SemanticName, "TEXCOORD") != 0 || p.SemanticIndex != 7)
+            continue;
+        // Must be a uint type — rules out the common float UV-style TEXCOORD7.
+        // We don't constrain the Mask here: FXC and DXC differ on how they
+        // report the mask for uint inputs and we'd miss legitimate cases.
+        static uint32_t s_dumpCount = 0;
+        if (s_dumpCount++ < 8)
+            DebugLog("[MDI] D3D12 VS TEXCOORD7 found: ComponentType=%d Mask=0x%X RWMask=0x%X\n",
+                     p.ComponentType, p.Mask, p.ReadWriteMask);
+        if (p.ComponentType != D3D_REGISTER_COMPONENT_UINT32)
+            continue;
+        found = true;
+        break;
     }
 
     refl->Release();
@@ -146,7 +160,9 @@ static InlineHookData g_hookLoadGfxPipeline;
 // Shared: check if TEXCOORD7 already exists in input layout
 // -----------------------------------------------------------------------
 
-// Check if TEXCOORD7 exists in input layout at all
+// Any TEXCOORD7 in the input layout — regardless of format. If present, we
+// must REPLACE that element with our per-instance R32_UINT one (a duplicate
+// would make CreateGraphicsPipelineState fail with E_INVALIDARG).
 static bool HasTexcoord7(const D3D12_INPUT_ELEMENT_DESC* elements, UINT count)
 {
     for (UINT i = 0; i < count; ++i)
@@ -158,7 +174,8 @@ static bool HasTexcoord7(const D3D12_INPUT_ELEMENT_DESC* elements, UINT count)
     return false;
 }
 
-// Check if TEXCOORD7 already exists AND is correctly configured
+// Already correctly configured for MDI: slot 15, per-instance, step rate 1,
+// AND format R32_UINT. Anything else triggers a replace.
 static bool IsTexcoord7Correct(const D3D12_INPUT_ELEMENT_DESC* elements, UINT count)
 {
     for (UINT i = 0; i < count; ++i)
@@ -168,7 +185,8 @@ static bool IsTexcoord7Correct(const D3D12_INPUT_ELEMENT_DESC* elements, UINT co
         {
             return elements[i].InputSlot == kInstanceVBSlot &&
                    elements[i].InputSlotClass == D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA &&
-                   elements[i].InstanceDataStepRate == 1;
+                   elements[i].InstanceDataStepRate == 1 &&
+                   elements[i].Format == DXGI_FORMAT_R32_UINT;
         }
     }
     return false;
@@ -223,56 +241,46 @@ static HRESULT STDMETHODCALLTYPE Hook_CreateGraphicsPipelineState(
 
     const auto& il = pDesc->InputLayout;
 
-    // Case 1: IL already declares TEXCOORD7 (indexed prime-mesh path) — patch it.
-    if (HasTexcoord7(il.pInputElementDescs, il.NumElements))
+    // The defining MDI marker is in the VS bytecode: a uint scalar TEXCOORD7
+    // input (MDI_INSTANCE_ID_PARAMETER). PSOs without this marker get a true
+    // pass-through.
+    if (!VSInputHasTexcoord7(pDesc->VS.pShaderBytecode, pDesc->VS.BytecodeLength))
     {
-        if (IsTexcoord7Correct(il.pInputElementDescs, il.NumElements))
-        {
-            g_psoSkippedCount++;
-            return callOrig(self, pDesc, riid, ppPipelineState);
-        }
+        g_psoSkippedCount++;
+        return callOrig(self, pDesc, riid, ppPipelineState);
+    }
 
-        std::vector<D3D12_INPUT_ELEMENT_DESC> elements;
+    // Already correctly configured for MDI (slot 15, per-instance, R32_UINT) —
+    // skip, otherwise we'd modify a PSO we previously rewrote.
+    if (IsTexcoord7Correct(il.pInputElementDescs, il.NumElements))
+    {
+        g_psoSkippedCount++;
+        return callOrig(self, pDesc, riid, ppPipelineState);
+    }
+
+    // Replace if IL already carries a TEXCOORD7 (any format — user mesh may
+    // already have it as e.g. float UV2; we override since the VS demands a
+    // uint). Add otherwise.
+    bool ilHasTexcoord7 = HasTexcoord7(il.pInputElementDescs, il.NumElements);
+    std::vector<D3D12_INPUT_ELEMENT_DESC> elements;
+    if (ilHasTexcoord7)
         BuildInjectedLayout(il.pInputElementDescs, il.NumElements, elements);
+    else
+        BuildAugmentedLayout(il.pInputElementDescs, il.NumElements, elements);
 
-        D3D12_GRAPHICS_PIPELINE_STATE_DESC modifiedDesc = *pDesc;
-        modifiedDesc.InputLayout.pInputElementDescs = elements.data();
-        modifiedDesc.InputLayout.NumElements        = static_cast<UINT>(elements.size());
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC modifiedDesc = *pDesc;
+    modifiedDesc.InputLayout.pInputElementDescs = elements.data();
+    modifiedDesc.InputLayout.NumElements        = static_cast<UINT>(elements.size());
 
-        HRESULT hr = callOrig(self, &modifiedDesc, riid, ppPipelineState);
+    HRESULT hr = callOrig(self, &modifiedDesc, riid, ppPipelineState);
 
-        g_psoInjectedCount++;
-        if (g_psoInjectedCount <= 5)
-            DebugLog("[MDI] PSO legacy hook: patched TEXCOORD7 to per-instance (slot %u), "
-                     "elements=%u, hr=0x%08X\n",
-                     kInstanceVBSlot, (unsigned)elements.size(), hr);
-        return hr;
-    }
-
-    // Case 2: IL has no TEXCOORD7. If VS declares it (mesh path with user mesh
-    // + MDI_INSTANCE_ID_PARAMETER shader), append a per-instance element on slot 15.
-    if (VSInputHasTexcoord7(pDesc->VS.pShaderBytecode, pDesc->VS.BytecodeLength))
-    {
-        std::vector<D3D12_INPUT_ELEMENT_DESC> augmented;
-        BuildAugmentedLayout(il.pInputElementDescs, il.NumElements, augmented);
-
-        D3D12_GRAPHICS_PIPELINE_STATE_DESC modifiedDesc = *pDesc;
-        modifiedDesc.InputLayout.pInputElementDescs = augmented.data();
-        modifiedDesc.InputLayout.NumElements        = static_cast<UINT>(augmented.size());
-
-        HRESULT hr = callOrig(self, &modifiedDesc, riid, ppPipelineState);
-
-        g_psoAddedCount++;
-        if (g_psoAddedCount <= 5)
-            DebugLog("[MDI] PSO legacy hook: ADDED per-instance TEXCOORD7 on slot %u "
-                     "for user mesh (elements %u -> %u), hr=0x%08X\n",
-                     kInstanceVBSlot, il.NumElements, (UINT)augmented.size(), hr);
-        return hr;
-    }
-
-    // Case 3: VS doesn't declare TEXCOORD7 — pass through.
-    g_psoSkippedCount++;
-    return callOrig(self, pDesc, riid, ppPipelineState);
+    if (ilHasTexcoord7) g_psoInjectedCount++; else g_psoAddedCount++;
+    if ((g_psoInjectedCount + g_psoAddedCount) <= 8)
+        DebugLog("[MDI] PSO legacy hook: %s per-instance TEXCOORD7 on slot %u, "
+                 "elements %u -> %u, hr=0x%08X\n",
+                 ilHasTexcoord7 ? "REPLACED" : "ADDED",
+                 kInstanceVBSlot, il.NumElements, (UINT)elements.size(), hr);
+    return hr;
 }
 
 // -----------------------------------------------------------------------
@@ -380,45 +388,34 @@ static HRESULT STDMETHODCALLTYPE Hook_CreatePipelineState(
         return callOrig(self, &modifiedDesc, riid, ppPipelineState);
     };
 
-    // Case 1: IL already declares TEXCOORD7 (indexed prime-mesh path) — patch it.
-    if (HasTexcoord7(origLayout->pInputElementDescs, origLayout->NumElements))
+    // VS is the defining marker.
+    if (!origVS || !VSInputHasTexcoord7(origVS->pShaderBytecode, origVS->BytecodeLength))
     {
-        if (IsTexcoord7Correct(origLayout->pInputElementDescs, origLayout->NumElements))
-        {
-            g_psoSkippedCount++;
-            return callOrig(self, pDesc, riid, ppPipelineState);
-        }
+        g_psoSkippedCount++;
+        return callOrig(self, pDesc, riid, ppPipelineState);
+    }
 
-        std::vector<D3D12_INPUT_ELEMENT_DESC> elements;
+    if (IsTexcoord7Correct(origLayout->pInputElementDescs, origLayout->NumElements))
+    {
+        g_psoSkippedCount++;
+        return callOrig(self, pDesc, riid, ppPipelineState);
+    }
+
+    bool ilHasTexcoord7 = HasTexcoord7(origLayout->pInputElementDescs, origLayout->NumElements);
+    std::vector<D3D12_INPUT_ELEMENT_DESC> elements;
+    if (ilHasTexcoord7)
         BuildInjectedLayout(origLayout->pInputElementDescs, origLayout->NumElements, elements);
+    else
+        BuildAugmentedLayout(origLayout->pInputElementDescs, origLayout->NumElements, elements);
 
-        HRESULT hr = issueWithLayout(elements);
-        g_psoInjectedCount++;
-        if (g_psoInjectedCount <= 5)
-            DebugLog("[MDI] PSO stream hook: patched TEXCOORD7 to per-instance (slot %u), "
-                     "elements=%u, hr=0x%08X\n",
-                     kInstanceVBSlot, (unsigned)elements.size(), hr);
-        return hr;
-    }
-
-    // Case 2: IL has no TEXCOORD7. If VS declares it, append a per-instance element.
-    if (origVS && VSInputHasTexcoord7(origVS->pShaderBytecode, origVS->BytecodeLength))
-    {
-        std::vector<D3D12_INPUT_ELEMENT_DESC> augmented;
-        BuildAugmentedLayout(origLayout->pInputElementDescs, origLayout->NumElements, augmented);
-
-        HRESULT hr = issueWithLayout(augmented);
-        g_psoAddedCount++;
-        if (g_psoAddedCount <= 5)
-            DebugLog("[MDI] PSO stream hook: ADDED per-instance TEXCOORD7 on slot %u "
-                     "for user mesh (elements %u -> %u), hr=0x%08X\n",
-                     kInstanceVBSlot, origLayout->NumElements, (UINT)augmented.size(), hr);
-        return hr;
-    }
-
-    // Case 3: VS doesn't declare TEXCOORD7 — pass through.
-    g_psoSkippedCount++;
-    return callOrig(self, pDesc, riid, ppPipelineState);
+    HRESULT hr = issueWithLayout(elements);
+    if (ilHasTexcoord7) g_psoInjectedCount++; else g_psoAddedCount++;
+    if ((g_psoInjectedCount + g_psoAddedCount) <= 8)
+        DebugLog("[MDI] PSO stream hook: %s per-instance TEXCOORD7 on slot %u, "
+                 "elements %u -> %u, hr=0x%08X\n",
+                 ilHasTexcoord7 ? "REPLACED" : "ADDED",
+                 kInstanceVBSlot, origLayout->NumElements, (UINT)elements.size(), hr);
+    return hr;
 }
 
 // -----------------------------------------------------------------------
@@ -442,28 +439,20 @@ static HRESULT STDMETHODCALLTYPE Hook_LoadGraphicsPipeline(
 
     const auto& il = pDesc->InputLayout;
 
-    // Decide which augmentation, if any, applies to this PSO.
-    enum Mode { ModePassthrough, ModePatch, ModeAdd };
-    Mode mode = ModePassthrough;
-
-    if (HasTexcoord7(il.pInputElementDescs, il.NumElements))
-    {
-        if (IsTexcoord7Correct(il.pInputElementDescs, il.NumElements))
-        {
-            g_psoSkippedCount++;
-            return callOrig(self, pName, pDesc, riid, ppPipelineState);
-        }
-        mode = ModePatch;
-    }
-    else if (VSInputHasTexcoord7(pDesc->VS.pShaderBytecode, pDesc->VS.BytecodeLength))
-    {
-        mode = ModeAdd;
-    }
-    else
+    // VS is the defining marker.
+    if (!VSInputHasTexcoord7(pDesc->VS.pShaderBytecode, pDesc->VS.BytecodeLength))
     {
         g_psoSkippedCount++;
         return callOrig(self, pName, pDesc, riid, ppPipelineState);
     }
+    if (IsTexcoord7Correct(il.pInputElementDescs, il.NumElements))
+    {
+        g_psoSkippedCount++;
+        return callOrig(self, pName, pDesc, riid, ppPipelineState);
+    }
+
+    enum Mode { ModePatch, ModeAdd };
+    Mode mode = HasTexcoord7(il.pInputElementDescs, il.NumElements) ? ModePatch : ModeAdd;
 
     std::vector<D3D12_INPUT_ELEMENT_DESC> elements;
     if (mode == ModePatch)
@@ -572,6 +561,13 @@ bool MDIBackend_D3D12::Initialize(IUnityInterfaces* unityInterfaces)
         return false;
     }
 
+    // PSO hooks must be installed early — Unity compiles many PSOs (including
+    // those for user meshes with our MDI shader) at scene load, BEFORE the
+    // first C# MDI draw call. A lazy/opt-in install would miss those PSOs,
+    // and any PSO whose VS expects TEXCOORD7 but whose IL doesn't carry it
+    // would fail D3D12 validation. Safety comes from the strict UINT32 /
+    // R32_UINT match in VSInputHasTexcoord7 / HasTexcoord7 below — only our
+    // own MDI_INSTANCE_ID_PARAMETER shaders are affected.
     InstallDeviceHook();
     CreateInstanceIDBuffer();
 
@@ -688,8 +684,15 @@ void MDIBackend_D3D12::ConfigureEvents(IUnityInterfaces* unityInterfaces, int ba
     {
         UnityD3D12PluginEventConfig config = {};
         config.graphicsQueueAccess = kUnityD3D12GraphicsQueueAccess_DontCare;
-        config.flags = 0;  // DEBUG: no flags — don't tell Unity we modify state
-        config.ensureActiveRenderTextureIsBound = false;  // DEBUG: don't rebind RT
+        // We change IB / VB slot 15 / topology inside ExecuteMDI on Unity's
+        // command list. Without ModifiesCommandBuffersState, Unity's internal
+        // state-tracking goes stale after our event and subsequent draws
+        // (notably Editor IMGUI) inherit our state and misrender.
+        config.flags = kUnityD3D12EventConfigFlag_ModifiesCommandBuffersState;
+        // Make Unity (re)bind the active RT before our event so we always
+        // execute against a valid render target — important on the first
+        // frames in Editor when RT state hasn't fully settled yet.
+        config.ensureActiveRenderTextureIsBound = true;
         d3d12->ConfigureEvent(baseEventID + i, &config);
     }
 

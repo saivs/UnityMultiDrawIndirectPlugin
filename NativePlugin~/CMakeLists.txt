@@ -4,6 +4,12 @@ project(GfxPluginMDI LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Diagnostic logging — verbose output from the backends (PSO hook decisions,
+# bytecode reflection results, ExecuteMDI counts, etc.). Defaults to OFF for
+# Release builds (DebugLog becomes a no-op the optimizer strips) and ON for
+# Debug builds. Force it on with -DMDI_DEBUG_LOG=ON to debug release builds.
+option(MDI_DEBUG_LOG "Enable native plugin debug logging" OFF)
+
 set(SOURCES
     src/MultiDrawIndirect.cpp
     src/MDIBackend_Vulkan.cpp
@@ -71,6 +77,13 @@ else()
 endif()
 
 target_include_directories(GfxPluginMDI PRIVATE src)
+
+# MDI_DEBUG_LOG is enabled for Debug configs unconditionally, plus whenever
+# the user passes -DMDI_DEBUG_LOG=ON regardless of config.
+target_compile_definitions(GfxPluginMDI PRIVATE $<$<CONFIG:Debug>:MDI_DEBUG_LOG>)
+if (MDI_DEBUG_LOG)
+    target_compile_definitions(GfxPluginMDI PRIVATE MDI_DEBUG_LOG)
+endif()
 
 if (MSVC)
     # Static CRT — eliminates VCRUNTIME140.dll dependency

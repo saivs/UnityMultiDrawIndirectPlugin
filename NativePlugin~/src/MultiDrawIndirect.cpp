@@ -5,6 +5,7 @@
 #include "Unity/IUnityRenderingExtensions.h"
 #include "MDIBackend.h"
 #include "MDIBackend_Stub.h"
+#include "MDILog.h"
 
 #ifdef _WIN32
 #include "MDIBackend_D3D12.h"
@@ -288,4 +289,12 @@ MDI_GetMaxInstanceCount()
 {
     if (!g_backend) return 0;
     return g_backend->GetMaxInstanceCount();
+}
+
+// Routes plugin logs into Unity's Debug.Log via a C# callback. Pass nullptr
+// to fall back to the platform default (OutputDebugStringA on Windows).
+extern "C" void UNITY_INTERFACE_EXPORT UNITY_INTERFACE_API
+MDI_SetLogCallback(MDILogCallback callback)
+{
+    g_mdiLogCallback = callback;
 }

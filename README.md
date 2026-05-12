@@ -248,15 +248,26 @@ In a typical D3D11/D3D12 application, adding a per-instance vertex buffer is str
 
 ### The Workaround: Input Layout Hooking
 
-This plugin solves the problem by **intercepting** `ID3D11Device::CreateInputLayout()` (and the equivalent D3D12 PSO creation entry points: `CreateGraphicsPipelineState`, the stream-based `CreatePipelineState`, and `ID3D12PipelineLibrary::LoadGraphicsPipeline`) at the native level using inline function hooks. When Unity creates an input layout / PSO, the hook handles three cases:
+This plugin solves the problem by **intercepting** `ID3D11Device::CreateInputLayout()` (and the equivalent D3D12 PSO creation entry points: `CreateGraphicsPipelineState`, the stream-based `CreatePipelineState`, and `ID3D12PipelineLibrary::LoadGraphicsPipeline`) at the native level using inline function hooks.
 
-1. **IL already declares `TEXCOORD7`** (indexed path's prime mesh) — patch that element to read from vertex buffer slot 15, classification `PER_INSTANCE_DATA`, step rate 1, format `R32_UINT`.
-2. **IL has no `TEXCOORD7` but the VS does** (mesh path with a user-supplied mesh) — reflect the VS bytecode (passed into `CreateInputLayout` directly, or pulled from the PSO desc / stream subobject) using `D3DReflect` from `d3dcompiler_47.dll`. If the input signature contains `TEXCOORD7`, append a new per-instance element on slot 15 with the same parameters as case 1. This is what makes `MultiDrawMeshIndirect` work with arbitrary user meshes without forcing them to carry a `TEXCOORD7` channel.
-3. Otherwise — pass through unchanged (skybox, post-processing, depth-only, etc.).
+**Detection gate.** The hook must affect MDI shaders only — patching an unrelated PSO breaks rendering (notably Editor IMGUI). The defining marker is the vertex shader: `MDI_INSTANCE_ID_PARAMETER` expands to `uint _mdi_globalInstanceID : TEXCOORD7`, a uint scalar with a very specific signature. A secondary marker is used for the indexed path: the prime mesh's input layout always carries `TEXCOORD7` with `DXGI_FORMAT_R32_UINT`, a combination no Unity shader produces. Either marker alone is sufficient to recognise an MDI PSO:
+
+- **D3D12** — VS-side detection via `D3DReflect` (`ComponentType == UINT32`, scalar). DXC reports the input type faithfully, so the strict filter is reliable.
+- **D3D11** — Unity often passes a *signature-only* blob (from `D3DGetInputSignatureBlob`) to `CreateInputLayout`. `D3DReflect` rejects those with `E_INVALIDARG` because the `SHEX` chunk is absent. The plugin therefore parses the DXBC `ISGN` / `ISG1` chunk directly to find `TEXCOORD7` in the input signature. The IL-side R32_UINT marker also acts as a fallback for the indexed path: even when FXC's signature reporting is unhelpful, the prime mesh's IL alone triggers the hook.
+
+**Once gated as MDI**, the hook then:
+
+1. **Skips** the PSO if its IL is already correctly configured (slot 15, per-instance, step rate 1, `R32_UINT`) — re-patching a previously-rewritten PSO is a no-op.
+2. **Replaces** an existing `TEXCOORD7` IL element with a per-instance one on slot 15. This covers both the indexed prime mesh (which declares `TEXCOORD7` as `R32_UINT` already) and the mesh path with a user mesh that happens to carry `TEXCOORD7` of any format — appending a duplicate semantic would fail `CreateInputLayout` / `CreateGraphicsPipelineState` with `E_INVALIDARG`.
+3. **Adds** a new per-instance `TEXCOORD7` element on slot 15 if the IL has no `TEXCOORD7` at all (mesh path with a user mesh that doesn't carry that channel).
+
+Non-MDI PSOs (skybox, post-processing, depth-only, Editor IMGUI, etc.) fall through unchanged.
 
 At draw time, the plugin binds the identity buffer to slot 15. The Input Assembler then automatically loads the correct global index for each instance.
 
-**Triggering PSO recreation (indexed path):** Unity creates Pipeline State Objects before the native plugin is loaded, so the hook is not active during initial PSO creation. For the indexed (procedural) path the plugin uses `VertexAttributeDescriptor` on the C# side to declare a tiny prime-mesh whose layout includes `TEXCOORD7`. This causes Unity to create a new input layout / PSO that passes through the hook (case 1 above). The mesh path doesn't need this trick — Unity creates a PSO for the user mesh on its first draw, and the hook fires through case 2.
+**D3D11 immediate-context state restoration.** Unlike D3D12 where each plugin event uses Unity's freshly-recorded command list, the D3D11 plugin event runs on Unity's immediate context. Unity caches IA shadow-state (bound IB, VB slot 15, primitive topology) and skips redundant `IASet*` calls based on it. To avoid leaking the plugin's `IASet*` changes into subsequent Unity draws (which would manifest as broken Editor IMGUI / UI), the backend saves the relevant IA state via `IAGetIndexBuffer` / `IAGetVertexBuffers` / `IAGetPrimitiveTopology` before binding its own buffers, and restores it after the NvAPI MDI call. `Get*` methods return AddRef'd buffer pointers, which the backend releases after re-setting.
+
+**Triggering PSO recreation (indexed path):** Unity may have cached Pipeline State Objects for the user material before the native plugin is loaded, so the hook would not see them during initial PSO creation. For the indexed (procedural) path the plugin uses `VertexAttributeDescriptor` on the C# side to declare a tiny prime-mesh whose layout includes `TEXCOORD7` as `R32_UINT`. Drawing this prime mesh forces Unity to create a new input layout / PSO that passes through the hook. The mesh path doesn't need this trick — the user mesh's PSO has a different layout from anything Unity could have cached without the plugin, so its creation is always intercepted.
 
 ### OpenGL / OpenGL ES
 
