@@ -94,7 +94,7 @@ Add the package via Unity Package Manager using a git URL:
 2. Click **+** > **Add package from git URL...**
 3. Enter:
    ```
-   https://github.com/saivs/UnityMultiDrawIndirectPlugin.git
+   https://github.com/saivs/com.saivs.plugin.mdi.git
    ```
 
 ## Usage
